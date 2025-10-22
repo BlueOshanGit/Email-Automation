@@ -72,12 +72,29 @@ const progressiveChunks = (arr, sizes = [300, 100, 50, 1]) => {
   return result;
 };
 
+// Legacy lists are NOT supported by v3 API - must be migrated to ILS
+const getContactsFromLegacyList = async (listId, maxCount = Infinity) => {
+  console.log(`❌ List ${listId} is a LEGACY list - v3 API does not support legacy lists`);
+  console.log(`📋 MIGRATION REQUIRED:`);
+  console.log(`   Option 1: Manually migrate in HubSpot UI (Contacts → Lists → Clone to ILS)`);
+  console.log(`   Option 2: Use migration API: POST /api/migrate-legacy-list { "legacyListId": "${listId}" }`);
+
+  throw new Error(
+    `List ${listId} is a legacy list. HubSpot v3 API only supports ILS (Integrated List Segmentation) lists. ` +
+    `Please migrate this list to ILS format. Migration options: ` +
+    `1) HubSpot UI: Contacts → Lists → Find list ${listId} → Actions → Clone as ILS list, OR ` +
+    `2) Use API: POST /api/migrate-legacy-list with body {"legacyListId": "${listId}", "newListName": "Your List Name"}`
+  );
+};
+
 const getContactsFromList = async (listId, maxCount = Infinity) => {
   let allContacts = [];
   let hasMore = true;
-  let offset = 0;
+  let after = undefined;
   let consecutiveErrors = 0;
   let totalAttempts = 0;
+  let isLegacyList = false;
+  let v3Success = false;
 
   console.log(`📥 Starting to fetch contacts from list ${listId} (max: ${maxCount})`);
 
@@ -86,23 +103,31 @@ const getContactsFromList = async (listId, maxCount = Infinity) => {
       const countToFetch = Math.min(RETRIEVAL_BATCH_SIZE, maxCount - allContacts.length);
       totalAttempts++;
 
+      // Build params object for v3 API
+      const params = { limit: countToFetch };
+      if (after) {
+        params.after = after;
+      }
+
       const res = await axios.get(
-        `https://api.hubapi.com/contacts/v1/lists/${listId}/contacts/all`,
+        `https://api.hubapi.com/crm/v3/lists/${listId}/memberships`,
         {
           headers: hubspotHeaders,
-          params: { count: countToFetch, vidOffset: offset },
+          params: params,
           timeout: 30000 // 30 second timeout
         }
       );
 
-      const contacts = res.data.contacts || [];
-      const newContacts = contacts.map(c => c.vid);
+      v3Success = true; // Mark that v3 API call succeeded
+      const results = res.data.results || [];
+      const newContacts = results.map(record => parseInt(record.recordId));
       allContacts.push(...newContacts);
 
       console.log(`  ✓ Batch ${totalAttempts}: fetched ${newContacts.length} contacts (total: ${allContacts.length})`);
 
-      hasMore = res.data['has-more'] && allContacts.length < maxCount;
-      offset = res.data['vid-offset'];
+      // v3 API uses paging with 'after' cursor
+      hasMore = res.data.paging?.next?.after && allContacts.length < maxCount;
+      after = res.data.paging?.next?.after;
       consecutiveErrors = 0; // Reset error counter on success
 
       if (allContacts.length >= maxCount) {
@@ -115,6 +140,13 @@ const getContactsFromList = async (listId, maxCount = Infinity) => {
         await new Promise(r => setTimeout(r, 200));
       }
     } catch (error) {
+      // If 404 error on first attempt, this is likely a legacy list
+      if (error.response?.status === 404 && totalAttempts === 1) {
+        console.log(`  ℹ️ List ${listId} not found in v3 API - trying legacy v1 API...`);
+        isLegacyList = true;
+        break;
+      }
+
       consecutiveErrors++;
       console.error(`⚠️ Error fetching batch ${totalAttempts + 1} from list ${listId} (attempt ${consecutiveErrors}/${MAX_RETRIES}):`,
         error.response?.status || error.message);
@@ -138,6 +170,24 @@ const getContactsFromList = async (listId, maxCount = Infinity) => {
     }
   }
 
+  // If v3 succeeded but returned 0 contacts, try v1 API as fallback for legacy lists
+  if (v3Success && allContacts.length === 0 && !isLegacyList) {
+    console.log(`  ℹ️ v3 API returned 0 contacts - checking if legacy list has contacts via v1 API...`);
+    try {
+      const legacyContacts = await getContactsFromLegacyList(listId, maxCount);
+      if (legacyContacts.length > 0) {
+        console.log(`  ✅ Found ${legacyContacts.length} contacts in legacy list - using v1 API results`);
+        allContacts = legacyContacts;
+      }
+    } catch (legacyError) {
+      // If legacy API also fails, just use the empty v3 results
+      console.log(`  ℹ️ Legacy API also returned no results - list is truly empty`);
+    }
+  } else if (isLegacyList) {
+    // If detected as legacy list via 404, use v1 API
+    allContacts = await getContactsFromLegacyList(listId, maxCount);
+  }
+
   const uniqueContacts = [...new Set(allContacts)];
   console.log(`✅ Fetched ${uniqueContacts.length} unique contacts from list ${listId}`);
   return uniqueContacts;
@@ -147,21 +197,97 @@ const createHubSpotList = async (name) => {
   console.log(`📝 Creating list: ${name}`);
   try {
     const res = await axios.post(
-      'https://api.hubapi.com/contacts/v1/lists',
-      { name, dynamic: false },
+      'https://api.hubapi.com/crm/v3/lists',
+      {
+        name,
+        objectTypeId: '0-1', // 0-1 is for contact lists
+        processingType: 'MANUAL' // MANUAL allows adding/removing via API
+      },
       { headers: hubspotHeaders }
     );
-    return res.data;
+
+    // HubSpot v3 API nests the list data under 'list' property
+    const listData = res.data.list || res.data;
+
+    console.log(`  ✅ List created successfully. ID: ${listData.listId}`);
+
+    // Ensure listId exists in response
+    if (!listData.listId) {
+      console.error('  ⚠️ Warning: listId not found in response:', res.data);
+      throw new Error('List created but listId not returned from HubSpot API');
+    }
+
+    return listData;
   } catch (error) {
-    console.error(`❌ Failed to create list: ${name}`, error.message);
+    console.error(`❌ Failed to create list: ${name}`, error.response?.data || error.message);
+    if (error.response?.data) {
+      console.error(`  Error details:`, JSON.stringify(error.response.data, null, 2));
+    }
     throw error;
   }
 };
 
-const addContactsToList = async (listId, contacts) => {
+const verifyListIsManual = async (listId) => {
+  try {
+    const res = await axios.get(
+      `https://api.hubapi.com/crm/v3/lists/${listId}`,
+      { headers: hubspotHeaders }
+    );
+
+    // ALWAYS log the response for debugging
+    console.log(`  🔍 DEBUG: API Response for list ${listId}:`, JSON.stringify(res.data, null, 2));
+
+    // HubSpot v3 API may return data nested under 'list' property or at root level
+    const listData = res.data.list || res.data;
+
+    console.log(`  🔍 DEBUG: Extracted listData:`, JSON.stringify(listData, null, 2));
+
+    const processingType = listData.processingType || listData.processing_type;
+    const name = listData.name || listData.listName || `ID: ${listId}`;
+
+    console.log(`  📋 List ${listId} info: Name="${name}", ProcessingType="${processingType}"`);
+
+    if (!processingType) {
+      console.error(`  ⚠️ Could not determine processingType for list ${listId} - assuming it's not MANUAL`);
+      return false;
+    }
+
+    if (processingType !== 'MANUAL') {
+      console.error(`  ❌ List ${listId} has processingType="${processingType}" - only MANUAL lists support API member addition`);
+      console.error(`  💡 Solution: Either change to MANUAL in HubSpot UI or use a different list`);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    if (error.response?.status === 404) {
+      console.error(`  ❌ List ${listId} not found - it may be a legacy list`);
+      console.error(`  💡 Solution: Migrate to ILS format or use GET /api/migration-guide/${listId}`);
+    } else {
+      console.error(`  ⚠️ Could not verify list ${listId}:`, error.response?.status || error.message);
+      if (error.response?.data) {
+        console.error(`  📋 Error details:`, JSON.stringify(error.response.data, null, 2));
+      }
+    }
+    return false;
+  }
+};
+
+const addContactsToList = async (listId, contacts, skipVerification = false) => {
   if (!contacts || contacts.length === 0) {
     console.log(`  ⚠️ No contacts to add to list ${listId}`);
-    return;
+    return 0;
+  }
+
+  // Verify list is MANUAL before attempting to add contacts (unless skipped)
+  if (!skipVerification) {
+    const isManual = await verifyListIsManual(listId);
+    if (!isManual) {
+      console.error(`  ⛔ Skipping add to list ${listId} - not a MANUAL list`);
+      return 0;
+    }
+  } else {
+    console.log(`  ⚡ Skipping verification - attempting direct add to list ${listId}`);
   }
 
   const chunks = progressiveChunks(contacts);
@@ -174,9 +300,12 @@ const addContactsToList = async (listId, contacts) => {
 
     while (retries < MAX_RETRIES && !success) {
       try {
-        await axios.post(
-          `https://api.hubapi.com/contacts/v1/lists/${listId}/add`,
-          { vids: chunk },
+        // v3 API expects a direct array of string IDs (not wrapped in an object!)
+        const stringIds = chunk.map(id => String(id));
+
+        await axios.put(
+          `https://api.hubapi.com/crm/v3/lists/${listId}/memberships/add`,
+          stringIds,  // Send array directly, not { recordIds: [...] }
           {
             headers: hubspotHeaders,
             timeout: 30000
@@ -190,6 +319,15 @@ const addContactsToList = async (listId, contacts) => {
         retries++;
         console.error(`  ⚠️ Failed to add chunk ${index + 1} to list ${listId} (attempt ${retries}/${MAX_RETRIES}):`,
           error.response?.status || error.message);
+
+        // Log detailed error information to diagnose the issue
+        if (error.response?.data) {
+          console.error(`  📋 HubSpot Error Details:`, JSON.stringify(error.response.data, null, 2));
+          console.error(`  📋 Error Status: ${error.response?.status}`);
+          console.error(`  📋 Error Message: ${error.response?.data?.message || 'No message'}`);
+        }
+        console.error(`  📋 Request payload:`, { recordIds: chunk.slice(0, 3), total: chunk.length });
+        console.error(`  📋 API Endpoint: PUT /crm/v3/lists/${listId}/memberships/add`);
 
         if (retries < MAX_RETRIES) {
           const delay = Math.min(1000 * Math.pow(2, retries - 1), 5000);
@@ -208,6 +346,7 @@ const addContactsToList = async (listId, contacts) => {
   }
 
   console.log(`  Summary: Successfully added ${successCount}/${contacts.length} contacts to list ${listId}`);
+  return successCount;
 };
 
 const updateContactProperties = async (contactIds, dateValue, brandValue) => {
@@ -324,17 +463,19 @@ const processSingleCampaign = async (config, daysFilter, modeFilter, usedContact
   // Always create the list even if empty (for tracking purposes)
   const newList = await createHubSpotList(listName);
 
+  let actualContactsAdded = 0;
+
   if (selectedContacts.length > 0) {
     console.log(`  Adding ${selectedContacts.length} contacts to lists...`);
 
     try {
-      // Add to send contact list if specified
+      // Add to send contact list if specified (skip verification to bypass API parsing issue)
       if (sendContactListId) {
-        await addContactsToList(sendContactListId, selectedContacts);
+        await addContactsToList(sendContactListId, selectedContacts, true);
       }
 
-      // Add to the newly created list
-      await addContactsToList(newList.listId, selectedContacts);
+      // Add to the newly created list (skip verification - we know it's MANUAL since we just created it)
+      actualContactsAdded = await addContactsToList(newList.listId, selectedContacts, true);
 
       // Update contact properties
       await updateContactProperties(selectedContacts, date, lastMarketingEmailSentBrand);
@@ -353,20 +494,20 @@ const processSingleCampaign = async (config, daysFilter, modeFilter, usedContact
     deleted: newList.deleted,
     filterCriteria: { days: daysFilter, mode: modeFilter },
     campaignDetails: { brand, campaign, date },
-    contactCount: selectedContacts.length,
+    contactCount: actualContactsAdded, // Use actual count, not selectedContacts.length
     requestedCount: count,
     availableCount: primaryBeforeFilter + secondaryBeforeFilter,
     filteredCount: (primaryBeforeFilter - primaryAfterFilter) + (secondaryBeforeFilter - secondaryAfterFilter),
     fulfillmentPercentage
   });
 
-  console.log(`✅ List created: ${listName} | ID: ${newList.listId}`);
+  console.log(`✅ List created: ${listName} | ID: ${newList.listId} | Actual contacts added: ${actualContactsAdded}/${selectedContacts.length}`);
 
   return {
     success: true,
     listName,
     listId: newList.listId,
-    contactCount: selectedContacts.length,
+    contactCount: actualContactsAdded, // Use actual count, not selectedContacts.length
     requestedCount: count,
     availableCount: primaryBeforeFilter + secondaryBeforeFilter,
     filteredCount: (primaryBeforeFilter - primaryAfterFilter) + (secondaryBeforeFilter - secondaryAfterFilter),
@@ -648,9 +789,9 @@ router.post('/include-list-in-email', ensureAuthenticated, async (req, res) => {
     console.log(`  Email: ${emailName} (ID: ${emailId})`);
     console.log(`  List: ${listName} (ID: ${listId})`);
 
-    // First, get the current email details using v1 API
+    // First, get the current email details using v3 API
     const emailResponse = await axios.get(
-      `https://api.hubapi.com/marketing-emails/v1/emails/${emailId}`,
+      `https://api.hubapi.com/marketing/v3/emails/${emailId}`,
       { headers: hubspotHeaders }
     );
 
@@ -670,20 +811,20 @@ router.post('/include-list-in-email', ensureAuthenticated, async (req, res) => {
       });
     }
 
-    // Get existing lists and ensure they're STRINGS (v1 API expects strings), removing duplicates
+    // Get existing lists and ensure they're INTEGERS (v3 API expects integers), removing duplicates
     const existingIncludedLists = [...new Set((currentEmail.mailingListsIncluded || []).map(id =>
-      String(id)
+      parseInt(id)
     ))];
 
     const existingExcludedLists = (currentEmail.mailingListsExcluded || []).map(id =>
-      String(id)
+      parseInt(id)
     );
 
-    // Convert the new listId to string (v1 API expects strings)
-    const listIdStr = String(listId);
+    // Convert the new listId to integer (v3 API expects integers)
+    const listIdInt = parseInt(listId);
 
     // Check if list is already included
-    if (existingIncludedLists.includes(listIdStr)) {
+    if (existingIncludedLists.includes(listIdInt)) {
       console.log(`  ℹ️ List ${listId} is already included in this email`);
       return res.json({
         success: true,
@@ -693,32 +834,32 @@ router.post('/include-list-in-email', ensureAuthenticated, async (req, res) => {
       });
     }
 
-    // Use the v1 API with PUT method (matching the curl exactly)
-    console.log(`  Using v1 API with PUT method...`);
+    // Use the v3 API with PATCH method to update draft
+    console.log(`  Using v3 API with PATCH method...`);
 
-    // Create updated list without duplicates - all as STRINGS
-    const updatedIncludeLists = [...new Set([...existingIncludedLists, listIdStr])];
+    // Create updated list without duplicates - convert to INTEGERS for v3 API
+    const updatedIncludeLists = [...new Set([...existingIncludedLists.map(id => parseInt(id)), parseInt(listId)])];
 
-    // Build payload matching curl structure - with STRING arrays
+    // Build payload for v3 API - with INTEGER arrays
     const updatePayload = {
       mailingListsIncluded: updatedIncludeLists
     };
 
-    // Preserve excluded lists if they exist - as STRINGS
+    // Preserve excluded lists if they exist - convert to INTEGERS
     if (existingExcludedLists && existingExcludedLists.length > 0) {
-      updatePayload.mailingListsExcluded = existingExcludedLists;
-      console.log(`  Preserving excluded lists: ${existingExcludedLists}`);
+      updatePayload.mailingListsExcluded = existingExcludedLists.map(id => parseInt(id));
+      console.log(`  Preserving excluded lists: ${updatePayload.mailingListsExcluded}`);
     }
 
     console.log(`  Final payload:`, JSON.stringify(updatePayload, null, 2));
 
-    const updateResponse = await axios.put(
-      `https://api.hubapi.com/marketing-emails/v1/emails/${emailId}`,
+    const updateResponse = await axios.patch(
+      `https://api.hubapi.com/marketing/v3/emails/${emailId}/draft`,
       updatePayload,
       { headers: hubspotHeaders }
     );
 
-    console.log(`✅ Successfully updated email using v1 API PUT`);
+    console.log(`✅ Successfully updated email using v3 API PATCH`);
 
     // Return success immediately - no verification needed
     return res.json({
@@ -760,6 +901,51 @@ router.post('/include-list-in-email', ensureAuthenticated, async (req, res) => {
   }
 });
 
+// Migration guide endpoint - provides instructions for manual migration
+router.get('/migration-guide/:legacyListId?', ensureAuthenticated, async (req, res) => {
+  const legacyListId = req.params.legacyListId;
 
+  const guide = {
+    message: "Legacy lists must be migrated to ILS format in HubSpot UI",
+    reason: "HubSpot v3 API only supports ILS (Integrated List Segmentation) lists, not legacy static lists",
+    migrationSteps: [
+      {
+        step: 1,
+        title: "Open HubSpot",
+        description: "Go to Contacts → Lists in your HubSpot account"
+      },
+      {
+        step: 2,
+        title: "Find your legacy list",
+        description: legacyListId
+          ? `Search for list ID: ${legacyListId}`
+          : "Search for your legacy list by ID or name"
+      },
+      {
+        step: 3,
+        title: "Clone to ILS format",
+        description: "Click Actions → Clone list → Choose 'Active list' or 'Static list (ILS)' → Save"
+      },
+      {
+        step: 4,
+        title: "Get new list ID",
+        description: "After cloning, note down the new ILS list ID from the list URL or settings"
+      },
+      {
+        step: 5,
+        title: "Update your database",
+        description: "Replace the old legacy list ID with the new ILS list ID in your segmentation collection"
+      }
+    ],
+    databaseUpdateExample: legacyListId ? {
+      mongodb: `db.segmentation.updateMany({ primaryListId: "${legacyListId}" }, { $set: { primaryListId: "NEW_ILS_LIST_ID" } })`,
+      note: "Replace NEW_ILS_LIST_ID with the ID from step 4"
+    } : null,
+    yourLegacyLists: legacyListId ? [legacyListId] : ["24920", "24921"],
+    estimatedTime: "5-10 minutes per list"
+  };
+
+  res.json(guide);
+});
 
 module.exports = router;

@@ -658,20 +658,15 @@
         }
 
 
-        // Function to normalize names by removing ONLY tier information, preserving Main/Sub in brand names
+        // Function to normalize names by removing tier information and standardizing format
         function normalizeName(name) {
             if (!name) return '';
 
-            // Remove ONLY tier-related information, NOT Main/Sub when they're part of brand names
             let normalized = name
-                // Remove tier patterns that are clearly tier information
+                // Only remove tier patterns - NO other suffixes
                 .replace(/\s+-\s+Tier\s*\d+[A-Z]?\s*/gi, '')  // Remove " - Tier 1", " - Tier 2", " - Tier 0A", etc.
                 .replace(/\s+-\s+Tier\s*[A-Z]+\s*/gi, '') // Remove " - Tier A", " - Tier B", etc.
                 .replace(/\s+-\s+T\d+[A-Z]?\s*/gi, '')  // Remove " - T0", " - T1", " - T2", etc.
-                // Only remove Main/Secondary/Primary when they appear as tier suffixes (after a hyphen at the end)
-                .replace(/\s+-\s+Main\s*$/gi, '')  // Remove " - Main" only at the end
-                .replace(/\s+-\s+Secondary\s*$/gi, '')  // Remove " - Secondary" only at the end
-                .replace(/\s+-\s+Primary\s*$/gi, '')  // Remove " - Primary" only at the end
                 .trim();
 
             // Remove extra spaces, multiple hyphens, and clean up
@@ -694,25 +689,29 @@
                 return true;
             }
 
-            // Extract brand and campaign from normalized names
-            // Format: Brand - Campaign - Date/Details
+            // Extract parts from normalized names
+            // Expected format: Brand - Category - Campaign - Date
             const emailParts = normalizedEmail.split('-').map(p => p.trim()).filter(p => p.length > 0);
             const listParts = normalizedList.split('-').map(p => p.trim()).filter(p => p.length > 0);
 
-            // Require at least brand + campaign for both
-            if (emailParts.length >= 2 && listParts.length >= 2) {
-                const emailBrand = emailParts[0];
-                const emailCampaign = emailParts[1];
-                const listBrand = listParts[0];
-                const listCampaign = listParts[1];
-
-                // Match if brand and campaign are exactly the same
-                if (emailBrand === listBrand && emailCampaign === listCampaign) {
-                    return true;
-                }
+            // Must have at least 3 parts to match (Brand - Category - Campaign)
+            // The last part is typically the date which we ignore for name matching
+            if (emailParts.length < 3 || listParts.length < 3) {
+                return false;
             }
 
-            return false;
+            // Compare first 3 parts: Brand (0) - Category (1) - Campaign (2)
+            const emailBrand = emailParts[0];
+            const listBrand = listParts[0];
+            const emailCategory = emailParts[1];
+            const listCategory = listParts[1];
+            const emailCampaign = emailParts[2];
+            const listCampaign = listParts[2];
+
+            // All three parts must match exactly
+            return (emailBrand === listBrand &&
+                   emailCategory === listCategory &&
+                   emailCampaign === listCampaign);
         }
 
 
@@ -1124,6 +1123,12 @@
                             console.log(`    Name mismatch details:`);
                             console.log(`      Email (normalized): "${normalizedEmailName}"`);
                             console.log(`      List (normalized): "${normalizedListName}"`);
+
+                            // Debug the parts breakdown
+                            const emailParts = normalizedEmailName.split('-').map(p => p.trim()).filter(p => p.length > 0);
+                            const listParts = normalizedListName.split('-').map(p => p.trim()).filter(p => p.length > 0);
+                            console.log(`      Email Parts: [${emailParts.map(p => '"' + p + '"').join(', ')}]`);
+                            console.log(`      List Parts: [${listParts.map(p => '"' + p + '"').join(', ')}]`);
                         }
                     }
 
