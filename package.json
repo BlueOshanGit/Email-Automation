@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "start": "nodemon app.js"
+    "start": "nodemon --quiet app.js"
   },
   "dependencies": {
     "@handlebars/allow-prototype-access": "^1.0.5",

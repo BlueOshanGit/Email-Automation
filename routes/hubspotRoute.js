@@ -96,8 +96,6 @@ const getContactsFromList = async (listId, maxCount = Infinity) => {
   let isLegacyList = false;
   let v3Success = false;
 
-  console.log(`📥 Starting to fetch contacts from list ${listId} (max: ${maxCount})`);
-
   while (hasMore && allContacts.length < maxCount) {
     try {
       const countToFetch = Math.min(RETRIEVAL_BATCH_SIZE, maxCount - allContacts.length);
@@ -123,8 +121,6 @@ const getContactsFromList = async (listId, maxCount = Infinity) => {
       const newContacts = results.map(record => parseInt(record.recordId));
       allContacts.push(...newContacts);
 
-      console.log(`  ✓ Batch ${totalAttempts}: fetched ${newContacts.length} contacts (total: ${allContacts.length})`);
-
       // v3 API uses paging with 'after' cursor
       hasMore = res.data.paging?.next?.after && allContacts.length < maxCount;
       after = res.data.paging?.next?.after;
@@ -142,46 +138,38 @@ const getContactsFromList = async (listId, maxCount = Infinity) => {
     } catch (error) {
       // If 404 error on first attempt, this is likely a legacy list
       if (error.response?.status === 404 && totalAttempts === 1) {
-        console.log(`  ℹ️ List ${listId} not found in v3 API - trying legacy v1 API...`);
         isLegacyList = true;
         break;
       }
 
       consecutiveErrors++;
-      console.error(`⚠️ Error fetching batch ${totalAttempts + 1} from list ${listId} (attempt ${consecutiveErrors}/${MAX_RETRIES}):`,
-        error.response?.status || error.message);
 
       // If we have some contacts and hit an error, return what we have
       if (allContacts.length > 0 && consecutiveErrors >= MAX_RETRIES) {
-        console.warn(`⚠️ Returning partial results: ${allContacts.length} contacts retrieved before error`);
         break;
       }
 
       // If no contacts yet and max retries reached, throw error
       if (allContacts.length === 0 && consecutiveErrors >= MAX_RETRIES) {
-        console.error(`❌ Failed to fetch any contacts from list ${listId} after ${MAX_RETRIES} attempts`);
+        console.error(`❌ Failed to fetch contacts from list ${listId}`);
         throw new Error(`Unable to fetch contacts from list ${listId}: ${error.message}`);
       }
 
       // Exponential backoff for retries
       const delay = Math.min(1000 * Math.pow(2, consecutiveErrors - 1), 10000);
-      console.log(`  ⏳ Waiting ${delay}ms before retry...`);
       await new Promise(r => setTimeout(r, delay));
     }
   }
 
   // If v3 succeeded but returned 0 contacts, try v1 API as fallback for legacy lists
   if (v3Success && allContacts.length === 0 && !isLegacyList) {
-    console.log(`  ℹ️ v3 API returned 0 contacts - checking if legacy list has contacts via v1 API...`);
     try {
       const legacyContacts = await getContactsFromLegacyList(listId, maxCount);
       if (legacyContacts.length > 0) {
-        console.log(`  ✅ Found ${legacyContacts.length} contacts in legacy list - using v1 API results`);
         allContacts = legacyContacts;
       }
     } catch (legacyError) {
       // If legacy API also fails, just use the empty v3 results
-      console.log(`  ℹ️ Legacy API also returned no results - list is truly empty`);
     }
   } else if (isLegacyList) {
     // If detected as legacy list via 404, use v1 API
@@ -189,7 +177,6 @@ const getContactsFromList = async (listId, maxCount = Infinity) => {
   }
 
   const uniqueContacts = [...new Set(allContacts)];
-  console.log(`✅ Fetched ${uniqueContacts.length} unique contacts from list ${listId}`);
   return uniqueContacts;
 };
 
@@ -209,20 +196,14 @@ const createHubSpotList = async (name) => {
     // HubSpot v3 API nests the list data under 'list' property
     const listData = res.data.list || res.data;
 
-    console.log(`  ✅ List created successfully. ID: ${listData.listId}`);
-
     // Ensure listId exists in response
     if (!listData.listId) {
-      console.error('  ⚠️ Warning: listId not found in response:', res.data);
       throw new Error('List created but listId not returned from HubSpot API');
     }
 
     return listData;
   } catch (error) {
-    console.error(`❌ Failed to create list: ${name}`, error.response?.data || error.message);
-    if (error.response?.data) {
-      console.error(`  Error details:`, JSON.stringify(error.response.data, null, 2));
-    }
+    console.error(`❌ Failed to create list: ${name}`);
     throw error;
   }
 };
@@ -234,48 +215,23 @@ const verifyListIsManual = async (listId) => {
       { headers: hubspotHeaders }
     );
 
-    // ALWAYS log the response for debugging
-    console.log(`  🔍 DEBUG: API Response for list ${listId}:`, JSON.stringify(res.data, null, 2));
-
     // HubSpot v3 API may return data nested under 'list' property or at root level
     const listData = res.data.list || res.data;
 
-    console.log(`  🔍 DEBUG: Extracted listData:`, JSON.stringify(listData, null, 2));
-
     const processingType = listData.processingType || listData.processing_type;
-    const name = listData.name || listData.listName || `ID: ${listId}`;
 
-    console.log(`  📋 List ${listId} info: Name="${name}", ProcessingType="${processingType}"`);
-
-    if (!processingType) {
-      console.error(`  ⚠️ Could not determine processingType for list ${listId} - assuming it's not MANUAL`);
-      return false;
-    }
-
-    if (processingType !== 'MANUAL') {
-      console.error(`  ❌ List ${listId} has processingType="${processingType}" - only MANUAL lists support API member addition`);
-      console.error(`  💡 Solution: Either change to MANUAL in HubSpot UI or use a different list`);
+    if (!processingType || processingType !== 'MANUAL') {
       return false;
     }
 
     return true;
   } catch (error) {
-    if (error.response?.status === 404) {
-      console.error(`  ❌ List ${listId} not found - it may be a legacy list`);
-      console.error(`  💡 Solution: Migrate to ILS format or use GET /api/migration-guide/${listId}`);
-    } else {
-      console.error(`  ⚠️ Could not verify list ${listId}:`, error.response?.status || error.message);
-      if (error.response?.data) {
-        console.error(`  📋 Error details:`, JSON.stringify(error.response.data, null, 2));
-      }
-    }
     return false;
   }
 };
 
 const addContactsToList = async (listId, contacts, skipVerification = false) => {
   if (!contacts || contacts.length === 0) {
-    console.log(`  ⚠️ No contacts to add to list ${listId}`);
     return 0;
   }
 
@@ -283,11 +239,8 @@ const addContactsToList = async (listId, contacts, skipVerification = false) => 
   if (!skipVerification) {
     const isManual = await verifyListIsManual(listId);
     if (!isManual) {
-      console.error(`  ⛔ Skipping add to list ${listId} - not a MANUAL list`);
       return 0;
     }
-  } else {
-    console.log(`  ⚡ Skipping verification - attempting direct add to list ${listId}`);
   }
 
   const chunks = progressiveChunks(contacts);
@@ -311,23 +264,12 @@ const addContactsToList = async (listId, contacts, skipVerification = false) => 
             timeout: 30000
           }
         );
-        console.log(`  ✅ Added chunk ${index + 1}/${chunks.length} (${chunk.length} contacts) to list ${listId}`);
+        console.log(`✅ Added chunk of ${chunk.length} contacts to list ${listId}`);
         successCount += chunk.length;
         success = true;
         await new Promise(r => setTimeout(r, 500));
       } catch (error) {
         retries++;
-        console.error(`  ⚠️ Failed to add chunk ${index + 1} to list ${listId} (attempt ${retries}/${MAX_RETRIES}):`,
-          error.response?.status || error.message);
-
-        // Log detailed error information to diagnose the issue
-        if (error.response?.data) {
-          console.error(`  📋 HubSpot Error Details:`, JSON.stringify(error.response.data, null, 2));
-          console.error(`  📋 Error Status: ${error.response?.status}`);
-          console.error(`  📋 Error Message: ${error.response?.data?.message || 'No message'}`);
-        }
-        console.error(`  📋 Request payload:`, { recordIds: chunk.slice(0, 3), total: chunk.length });
-        console.error(`  📋 API Endpoint: PUT /crm/v3/lists/${listId}/memberships/add`);
 
         if (retries < MAX_RETRIES) {
           const delay = Math.min(1000 * Math.pow(2, retries - 1), 5000);
@@ -339,13 +281,6 @@ const addContactsToList = async (listId, contacts, skipVerification = false) => 
     }
   }
 
-  if (failedChunks.length > 0) {
-    const failedCount = failedChunks.reduce((sum, chunk) => sum + chunk.length, 0);
-    console.error(`❌ Failed to add ${failedCount} contacts to list ${listId} after retries`);
-    // Don't throw - return partial success
-  }
-
-  console.log(`  Summary: Successfully added ${successCount}/${contacts.length} contacts to list ${listId}`);
   return successCount;
 };
 
@@ -376,8 +311,7 @@ const updateContactProperties = async (contactIds, dateValue, brandValue) => {
       );
       console.log(`✅ Updated batch of ${chunk.length} contacts`);
     } catch (err) {
-      console.error(`❌ Failed batch update:`, err.response?.data || err.message);
-      console.error(`🧪 Failing IDs:`, chunk);
+      console.error(`❌ Failed batch update`);
     }
 
     await new Promise(r => setTimeout(r, 300));
@@ -387,8 +321,7 @@ const updateContactProperties = async (contactIds, dateValue, brandValue) => {
 const processSingleCampaign = async (config, daysFilter, modeFilter, usedContactsSet) => {
   const { brand, campaign, primaryListId, secondaryListId, count, domain, date, sendContactListId, lastMarketingEmailSentBrand } = config;
 
-  console.log(`\n🚀 Starting campaign: ${campaign} | Brand: ${brand} | Domain: ${domain}`);
-  console.log(`  Target count: ${count} | Used contacts so far: ${usedContactsSet.size}`);
+  console.log(`🚀 Starting campaign: ${campaign} | Brand: ${brand} | Domain: ${domain}`);
 
   let primaryContacts = [];
   let secondaryContacts = [];
@@ -403,37 +336,23 @@ const processSingleCampaign = async (config, daysFilter, modeFilter, usedContact
     primaryContacts = await getContactsFromList(primaryListId, primaryFetchCount);
     primaryBeforeFilter = primaryContacts.length;
 
-    if (primaryBeforeFilter === 0) {
-      console.warn(`⚠️ Primary list ${primaryListId} returned no contacts!`);
-    }
-
     // Filter out used contacts
     primaryContacts = primaryContacts.filter(vid => !usedContactsSet.has(vid));
     primaryAfterFilter = primaryContacts.length;
-
-    console.log(`📥 Primary List ${primaryListId}: ${primaryBeforeFilter} fetched | ${primaryBeforeFilter - primaryAfterFilter} already used | ${primaryAfterFilter} available`);
 
     // If we need more contacts and have a secondary list
     if (primaryAfterFilter < count && secondaryListId) {
       const secondaryNeeded = count - primaryAfterFilter;
       const secondaryFetchCount = Math.max(secondaryNeeded * 3, 500);
 
-      console.log(`  Need ${secondaryNeeded} more contacts, fetching from secondary list...`);
-
       secondaryContacts = await getContactsFromList(secondaryListId, secondaryFetchCount);
       secondaryBeforeFilter = secondaryContacts.length;
 
-      if (secondaryBeforeFilter === 0) {
-        console.warn(`⚠️ Secondary list ${secondaryListId} returned no contacts!`);
-      }
-
       secondaryContacts = secondaryContacts.filter(vid => !usedContactsSet.has(vid));
       secondaryAfterFilter = secondaryContacts.length;
-
-      console.log(`📥 Secondary List ${secondaryListId}: ${secondaryBeforeFilter} fetched | ${secondaryBeforeFilter - secondaryAfterFilter} already used | ${secondaryAfterFilter} available`);
     }
   } catch (error) {
-    console.error(`❌ Error fetching contacts for campaign ${campaign}:`, error.message);
+    console.error(`❌ Error fetching contacts for campaign ${campaign}`);
     // Continue with whatever contacts we have
   }
 
@@ -448,15 +367,12 @@ const processSingleCampaign = async (config, daysFilter, modeFilter, usedContact
 
   const fulfillmentPercentage = count > 0 ? Math.round((selectedContacts.length / count) * 100) : 0;
 
-  if (selectedContacts.length === 0) {
-    console.error(`❌ NO CONTACTS SELECTED for ${campaign}!`);
-    console.error(`  Primary: ${primaryBeforeFilter} fetched, ${primaryAfterFilter} after filter`);
-    console.error(`  Secondary: ${secondaryBeforeFilter} fetched, ${secondaryAfterFilter} after filter`);
-    console.error(`  Total available: ${allContacts.length}`);
-    console.error(`  Requested: ${count}`);
-  } else {
-    console.log(`✂️ Final Selection: ${selectedContacts.length} of ${count} requested (${fulfillmentPercentage}%)`);
+  // Log primary and secondary list info
+  console.log(`📥 Primary List: ${primaryBeforeFilter} available | ${primaryBeforeFilter - primaryAfterFilter} filtered | ${primaryAfterFilter} remaining`);
+  if (secondaryListId) {
+    console.log(`📥 Secondary List: ${secondaryBeforeFilter} available | ${secondaryBeforeFilter - secondaryAfterFilter} filtered | ${secondaryAfterFilter} remaining`);
   }
+  console.log(`✂️ Final Selection: ${selectedContacts.length} of ${count} requested (${fulfillmentPercentage}%)`);
 
   const listName = `${brand} - ${campaign} - ${domain} - ${getFormattedDate(date)}`;
 
@@ -466,8 +382,6 @@ const processSingleCampaign = async (config, daysFilter, modeFilter, usedContact
   let actualContactsAdded = 0;
 
   if (selectedContacts.length > 0) {
-    console.log(`  Adding ${selectedContacts.length} contacts to lists...`);
-
     try {
       // Add to send contact list if specified (skip verification to bypass API parsing issue)
       if (sendContactListId) {
@@ -480,12 +394,12 @@ const processSingleCampaign = async (config, daysFilter, modeFilter, usedContact
       // Update contact properties
       await updateContactProperties(selectedContacts, date, lastMarketingEmailSentBrand);
     } catch (error) {
-      console.error(`⚠️ Error adding contacts to lists for ${campaign}:`, error.message);
+      console.error(`❌ Error adding contacts for ${campaign}`);
       // Continue even if there's an error adding contacts
     }
-  } else {
-    console.warn(`⚠️ Created empty list: ${listName} (no contacts available)`);
   }
+
+  console.log(`✅ List created: ${listName} | ID: ${newList.listId}`);
 
   const createdList = await CreatedList.create({
     name: listName,
@@ -500,8 +414,6 @@ const processSingleCampaign = async (config, daysFilter, modeFilter, usedContact
     filteredCount: (primaryBeforeFilter - primaryAfterFilter) + (secondaryBeforeFilter - secondaryAfterFilter),
     fulfillmentPercentage
   });
-
-  console.log(`✅ List created: ${listName} | ID: ${newList.listId} | Actual contacts added: ${actualContactsAdded}/${selectedContacts.length}`);
 
   return {
     success: true,
@@ -520,14 +432,11 @@ const processCampaignsWithDelay = async (listConfigs, daysFilter, modeFilter) =>
   const results = [];
   const usedContacts = new Set();
 
-  console.log(`\n🚦 Starting campaign execution with ${INTER_LIST_DELAY_MS / 60000} min delay`);
-
   for (const [index, config] of listConfigs.entries()) {
     const startTime = Date.now();
     const currentIndex = index + 1;
     const total = listConfigs.length;
 
-    console.log(`\n📋 [${currentIndex}/${total}] Processing: ${config.campaign}`);
     try {
       const result = await processSingleCampaign(config, daysFilter, modeFilter, usedContacts);
       results.push({ status: 'fulfilled', value: result });
@@ -535,17 +444,15 @@ const processCampaignsWithDelay = async (listConfigs, daysFilter, modeFilter) =>
       if (index < total - 1) {
         const elapsed = Date.now() - startTime;
         const delay = Math.max(0, INTER_LIST_DELAY_MS - elapsed);
-        console.log(`⏳ Waiting ${Math.round(delay / 1000)} seconds before next campaign`);
         await new Promise(r => setTimeout(r, delay));
       }
     } catch (error) {
-      console.error(`❌ Campaign failed: ${config.campaign} | ${error.message}`);
+      console.error(`❌ Campaign failed: ${config.campaign}`);
       results.push({ status: 'rejected', reason: error });
 
       const elapsed = Date.now() - startTime;
       const delay = Math.max(0, INTER_LIST_DELAY_MS - elapsed);
       if (index < listConfigs.length - 1) {
-        console.log(`⏳ Waiting ${Math.round(delay / 1000)} seconds after failure`);
         await new Promise(r => setTimeout(r, delay));
       }
     }
@@ -553,7 +460,7 @@ const processCampaignsWithDelay = async (listConfigs, daysFilter, modeFilter) =>
 
   const successful = results.filter(r => r.status === 'fulfilled');
   const failed = results.filter(r => r.status === 'rejected');
-  
+
   console.log(`\n🎯 Campaign run complete`);
   console.log(`✅ Success: ${successful.length}`);
   console.log(`❌ Failed: ${failed.length}`);
