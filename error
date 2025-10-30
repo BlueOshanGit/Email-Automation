@@ -1,0 +1,371 @@
+PS C:\Users\Srikumaran\Desktop\Listautomate - 15 sep 2025> npm start
+
+> emailautomation@0.0.0 start
+> nodemon --quiet app.js
+
+Server running on http://localhost:8000/
+MongoDB connected!
+
+📧 Including list in email:
+  Email: CDC P Sub Domain - CDC - 15 Mins Recipes Newsletter - 01 Nov 2025 (ID: 198621414060)
+  List: CDC P Sub Domain -  CDC - 15 Mins Recipes Newsletter - Tier 1 - 1 Nov 2025 (ID: 56245)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56245
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: TJK P Sub Domain - Bournvita - Zero Added Sugar Promo Flipkart - 01 Nov 2025 (ID: 198621414148)
+  List: TJK P Sub Domain - Bournvita - Zero Added Sugar Promo Flipkart - Tier 1 - 1 Nov 2025 (ID: 56256)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56256
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: CJD P Sub Domain - Cadbury Studio - Gift a Taste of Art - 01 Nov 2025 (ID: 198642584986)
+  List: CJD P Sub Domain - Cadbury Studio - Gift a Taste of Art - Tier 1 - 1 Nov 2025 (ID: 56233)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56233
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: Cadbury India P Sub Domain - Silk - Desserts Brownie and Plum Cake - 01 Nov 2025 (ID: 198621414053)
+  List: Cadbury India P Sub Domain - Silk - Desserts Brownie and Plum Cake - Tier 1 - 1 Nov 2025 (ID: 56298)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56298
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: Cadbury M Sub Domain - CDM - Packtivation Promo V2 - 01 Nov 2025 (ID: 198642584984)
+  List: Cadbury M Sub Domain - CDM - Packtivation Promo V2 - Tier 1 - 1 Nov 2025 (ID: 56285)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56285
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: Oreo P Sub Domain - Oreo - Toffee Launch Promo - Qcomm - 01 Nov 2025 (ID: 198642584981)
+  List: Oreo P Sub Domain  - Oreo - Toffee Launch Promo - Qcomm - Tier 1 - 1 Nov 2025 (ID: 56271)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56271
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: Cadbury Main Domain - Fuse - Paytm Promo - 01 Nov 2025 (ID: 198642584965)
+  List: Cadbury Main Domain  - Fuse - Paytm Promo - Tier 1 - 1 Nov 2025 (ID: 56299)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56299
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: Cadbury Main Domain - CDM - Packtivation Promo V2 - 01 Nov 2025 (ID: 198621414049)
+  List: Cadbury  Main Domain  - CDM - Packtivation Promo V2 - Tier 1 - 1 Nov 2025 (ID: 56287)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56287
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: Oreo Main Domain - Oreo - Toffee Launch Promo Non Qcomm - 01 Nov 2025 (ID: 198642584977)
+  List: Oreo Main Domain  - Oreo  - Toffee Launch Promo Non Qcomm - Tier 1 - 1 Nov 2025 (ID: 56268)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56268
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: Cadbury India Main Domain - Bournvita - Influencer Survey - 01 Nov 2025 (ID: 198642584961)
+  List: Cadbury India Main Domain  - Bournvita - Influencer Survey - Tier 1 - 1 Nov 2025 (ID: 56296)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56296
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: Cadbury Main Domain - 5Star - Paytm Promo - 01 Nov 2025 (ID: 198621414045)
+  List: Cadbury Main Domain  -  5Star - Paytm Promo - Tier 1 - 1 Nov 2025 (ID: 56274)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56274
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: CJD M Sub Domain - CJD - Generic Festive - 01 Nov 2025 (ID: 198642584970)
+  List: CJD M Sub Domain - CJD - Generic Festive - Tier 1 - 1 Nov 2025 (ID: 56239)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56239
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: Oreo Main Domain - Oreo - Toffee Launch Promo Qcomm - 01 Nov 2025 (ID: 198621413536)
+  List: Oreo Main Domain  - Oreo - Toffee Launch Promo  Qcomm - Tier 1 - 1 Nov 2025 (ID: 56265)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56265
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: Cadbury Main Domain - CDM - Packtivation Promo V1 - 01 Nov 2025 (ID: 198621413534)
+  List: Cadbury  Main Domain  - CDM - Packtivation Promo V1 - Tier 1 - 1 Nov 2025 (ID: 56281)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56281
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: Cadbury India M Sub Domain - Silk - Desserts Brownie and Plum Cake - 01 Nov 2025 (ID: 198621413520)
+  List: Cadbury India M Sub Domain - Silk - Desserts Brownie and Plum Cake - Tier 1 - 1 Nov 2025 (ID: 56297)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56297
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: TJK M Sub Domain - Bournvita - Zero Added Sugar Promo Amazon - 01 Nov 2025 (ID: 198621413529)
+  List: TJK M Sub Domain - Bournvita - Zero Added Sugar Promo Amazon - Tier 2 - 1 Nov 2025 (ID: 56254)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56254
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: TJK M Sub Domain - Bournvita - Zero Added Sugar Promo Amazon - 01 Nov 2025 (ID: 198621413529)
+  List: TJK M Sub Domain - Bournvita - Zero Added Sugar Promo Amazon - Tier 1 - 1 Nov 2025 (ID: 56251)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56251
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: Cadbury India Main Domain - CDM - Milkinis Promo - 01 Nov 2025 (ID: 198621413527)
+  List: Cadbury India Main Domain -  CDM - Milkinis Promo - Tier 1 - 1 Nov 2025 (ID: 56290)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56290
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: Cadbury Main Domain - Lickables - Reno and Doraemon Refresh Promo - 01 Nov 2025 (ID: 198621413522)
+  List: Cadbury Main Domain - Lickables - Reno and Doraemon Refresh Promo - Tier 1 - 1 Nov 2025 (ID: 56234)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56234
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: TJK Main Domain - Bournvita - Zero Added Sugar Promo Swiggy - 01 Nov 2025 (ID: 198621413503)
+  List: TJK Main Domain  - Bournvita - Zero Added Sugar Promo Swiggy - Tier 2 - 1 Nov 2025 (ID: 56250)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56250
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: TJK Main Domain - Bournvita - Zero Added Sugar Promo Swiggy - 01 Nov 2025 (ID: 198621413503)
+  List: TJK Main Domain  - Bournvita - Zero Added Sugar Promo Swiggy - Tier 1 - 1 Nov 2025 (ID: 56246)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56246
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: CDC Main Domain - CDC - 15 Mins Recipes Newsletter - 01 Nov 2025 (ID: 198621413501)
+  List: CDC Main Domain  -  CDC - 15 Mins Recipes Newsletter - Tier 1 - 1 Nov 2025 (ID: 56240)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56240
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: CJD Main Domain - Cadbury Studio - Gift a Taste of Art - 01 Nov 2025 (ID: 198621413497)
+  List: CJD Main Domain  - Cadbury Studio - Gift a Taste of Art - Tier 1 - 1 Nov 2025 (ID: 56235)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56235
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: Oreo Main Domain - Oreo - Sticker Promo - 01 Nov 2025 (ID: 198621413512)
+  List: Oreo Main Domain  - Oreo - Sticker Promo  - Tier 1 - 1 Nov 2025 (ID: 56263)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56263
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: Cadbury India Main Domain - CDM - New Launch Survey - 01 Nov 2025 (ID: 198621413495)
+  List: Cadbury India  Main Domain - CDM - New Launch Survey - Tier 1 - 1 Nov 2025 (ID: 56292)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56292
+  ]
+}
+✅ Successfully updated email using v3 API PATCH
+
+📧 Including list in email:
+  Email: CDC M Sub Domain - CDC - 15 Mins Recipes Newsletter - 01 Nov 2025 (ID: 198621413485)
+  List: CDC M Sub Domain -  CDC - 15 Mins Recipes Newsletter - Tier 1 - 1 Nov 2025 (ID: 56242)
+  Email retrieved. Current state: DRAFT
+  Current mailingListsIncluded: []
+  Current mailingListsExcluded: []
+  Using v3 API with PATCH method...
+  Final payload: {
+  "mailingListsIncluded": [
+    56242
+  ]
+}
+✅ Successfully updated email using v3 API PATCH

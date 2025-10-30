@@ -16,8 +16,8 @@ function ensureAuthenticated(req, res, next) {
 router.get("/login", async (req, res) => {
   try {
     res.render("login", {
-        pageTitle: "create list",
-      activePage: "create list"
+        pageTitle: "ED Automation",
+      activePage: "ED Automation"
     });
   } catch (error) {
     console.log(error);
@@ -65,8 +65,8 @@ router.get("/", ensureAuthenticated, async (req, res) => {
           lists: JSON.parse(JSON.stringify(lists)),
           hasLists: lists.length > 0,
           isEdit: false,
-          pageTitle: "create list",
-          activePage: "create list",
+          pageTitle: "ED Automation",
+          activePage: "ED Automation",
         });
       })
       .catch((error) => {
