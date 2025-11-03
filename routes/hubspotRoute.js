@@ -180,6 +180,36 @@ const getContactsFromList = async (listId, maxCount = Infinity) => {
   return uniqueContacts;
 };
 
+// Fetch legacy segment ID for a given ILS list
+const getLegacySegmentId = async (ilsListId) => {
+  try {
+    console.log(`  🔍 Fetching legacy segment ID for ILS list: ${ilsListId}`);
+
+    // Get list details from HubSpot v3 API
+    const res = await axios.get(
+      `https://api.hubapi.com/crm/v3/lists/${ilsListId}`,
+      { headers: hubspotHeaders }
+    );
+
+    const listData = res.data.list || res.data;
+
+    // The legacy segment ID is in the 'listId' field (confusingly named)
+    // While the ILS ID is typically in 'id' or returned as the creation response
+    const legacyId = listData.listId;
+
+    if (legacyId) {
+      console.log(`  ✅ Found legacy segment ID: ${legacyId}`);
+      return legacyId;
+    }
+
+    console.log(`  ⚠️ No legacy segment ID found for ILS list ${ilsListId}`);
+    return null;
+  } catch (error) {
+    console.error(`  ❌ Failed to fetch legacy segment ID for ILS list ${ilsListId}:`, error.message);
+    return null;
+  }
+};
+
 const createHubSpotList = async (name) => {
   console.log(`📝 Creating list: ${name}`);
   try {
@@ -201,7 +231,14 @@ const createHubSpotList = async (name) => {
       throw new Error('List created but listId not returned from HubSpot API');
     }
 
-    return listData;
+    // Fetch the legacy segment ID after list creation
+    const legacyListId = await getLegacySegmentId(listData.listId);
+
+    // Add legacy ID to the returned data
+    return {
+      ...listData,
+      legacyListId
+    };
   } catch (error) {
     console.error(`❌ Failed to create list: ${name}`);
     throw error;
@@ -399,11 +436,12 @@ const processSingleCampaign = async (config, daysFilter, modeFilter, usedContact
     }
   }
 
-  console.log(`✅ List created: ${listName} | ID: ${newList.listId}`);
+  console.log(`✅ List created: ${listName} | ILS ID: ${newList.listId} | Legacy ID: ${newList.legacyListId || 'N/A'}`);
 
   const createdList = await CreatedList.create({
     name: listName,
     listId: newList.listId,
+    legacyListId: newList.legacyListId, // Store legacy segment ID
     createdDate: new Date(),
     deleted: newList.deleted,
     filterCriteria: { days: daysFilter, mode: modeFilter },
@@ -419,6 +457,7 @@ const processSingleCampaign = async (config, daysFilter, modeFilter, usedContact
     success: true,
     listName,
     listId: newList.listId,
+    legacyListId: newList.legacyListId, // Include in return value
     contactCount: actualContactsAdded, // Use actual count, not selectedContacts.length
     requestedCount: count,
     availableCount: primaryBeforeFilter + secondaryBeforeFilter,
@@ -694,7 +733,37 @@ router.post('/include-list-in-email', ensureAuthenticated, async (req, res) => {
   try {
     console.log(`\n📧 Including list in email:`);
     console.log(`  Email: ${emailName} (ID: ${emailId})`);
-    console.log(`  List: ${listName} (ID: ${listId})`);
+    console.log(`  List: ${listName} (ILS ID: ${listId})`);
+
+    // Fetch the legacy segment ID from our database
+    const listRecord = await CreatedList.findOne({ listId: parseInt(listId) });
+
+    let legacyListId = null;
+    if (listRecord && listRecord.legacyListId) {
+      legacyListId = listRecord.legacyListId;
+      console.log(`  ✅ Found legacy segment ID in database: ${legacyListId}`);
+    } else {
+      // Fallback: Try to fetch from HubSpot API if not in database
+      console.log(`  ⚠️ Legacy ID not in database. Fetching from HubSpot API...`);
+      legacyListId = await getLegacySegmentId(listId);
+
+      if (legacyListId && listRecord) {
+        // Update the database record with the legacy ID
+        listRecord.legacyListId = legacyListId;
+        await listRecord.save();
+        console.log(`  ✅ Updated database with legacy segment ID: ${legacyListId}`);
+      }
+    }
+
+    if (!legacyListId) {
+      console.log(`  ❌ Could not find legacy segment ID for ILS list ${listId}`);
+      return res.json({
+        success: false,
+        message: 'Could not find legacy segment ID for this list. The list may not be compatible with email association.',
+        emailId: emailId,
+        listId: listId
+      });
+    }
 
     // First, get the current email details using v3 API
     const emailResponse = await axios.get(
@@ -704,8 +773,6 @@ router.post('/include-list-in-email', ensureAuthenticated, async (req, res) => {
 
     const currentEmail = emailResponse.data;
     console.log(`  Email retrieved. Current state: ${currentEmail.state || 'DRAFT'}`);
-    console.log(`  Current mailingListsIncluded: ${JSON.stringify(currentEmail.mailingListsIncluded || [])}`);
-    console.log(`  Current mailingListsExcluded: ${JSON.stringify(currentEmail.mailingListsExcluded || [])}`);
 
     // Check if email is in DRAFT state (required for updates)
     if (currentEmail.state && currentEmail.state !== 'DRAFT') {
@@ -718,44 +785,99 @@ router.post('/include-list-in-email', ensureAuthenticated, async (req, res) => {
       });
     }
 
-    // Get existing lists and ensure they're INTEGERS (v3 API expects integers), removing duplicates
-    const existingIncludedLists = [...new Set((currentEmail.mailingListsIncluded || []).map(id =>
-      parseInt(id)
-    ))];
+    // Determine which format the email uses
+    const usesToFormat = currentEmail.to && (currentEmail.to.contactIlsLists || currentEmail.to.contactLists);
+    const usesMailingListsFormat = currentEmail.mailingListsIncluded !== undefined || currentEmail.mailingListsExcluded !== undefined;
 
-    const existingExcludedLists = (currentEmail.mailingListsExcluded || []).map(id =>
-      parseInt(id)
-    );
+    console.log(`  Email format detection:`);
+    console.log(`    - Uses 'to' object format: ${usesToFormat}`);
+    console.log(`    - Uses 'mailingLists' format: ${usesMailingListsFormat}`);
 
-    // Convert the new listId to integer (v3 API expects integers)
-    const listIdInt = parseInt(listId);
+    // Use the LEGACY segment ID for email association (this is the KEY!)
+    const legacyListIdStr = String(legacyListId);
 
-    // Check if list is already included
-    if (existingIncludedLists.includes(listIdInt)) {
-      console.log(`  ℹ️ List ${listId} is already included in this email`);
-      return res.json({
-        success: true,
-        message: 'List is already included in this email',
-        emailId: emailId,
-        listId: listId
-      });
-    }
+    let updatePayload;
 
-    // Use the v3 API with PATCH method to update draft
-    console.log(`  Using v3 API with PATCH method...`);
+    if (usesToFormat) {
+      // Email uses the NEW 'to' object format
+      console.log(`  Using 'to' object format for list inclusion`);
 
-    // Create updated list without duplicates - convert to INTEGERS for v3 API
-    const updatedIncludeLists = [...new Set([...existingIncludedLists.map(id => parseInt(id)), parseInt(listId)])];
+      // Get current lists from 'to' object
+      const currentIlsInclude = currentEmail.to?.contactIlsLists?.include || [];
+      const currentIlsExclude = currentEmail.to?.contactIlsLists?.exclude || [];
+      const currentListsInclude = currentEmail.to?.contactLists?.include || [];
+      const currentListsExclude = currentEmail.to?.contactLists?.exclude || [];
 
-    // Build payload for v3 API - with INTEGER arrays
-    const updatePayload = {
-      mailingListsIncluded: updatedIncludeLists
-    };
+      console.log(`  Current ILS lists - Include: ${JSON.stringify(currentIlsInclude)}, Exclude: ${JSON.stringify(currentIlsExclude)}`);
+      console.log(`  Current contact lists - Include: ${JSON.stringify(currentListsInclude)}, Exclude: ${JSON.stringify(currentListsExclude)}`);
 
-    // Preserve excluded lists if they exist - convert to INTEGERS
-    if (existingExcludedLists && existingExcludedLists.length > 0) {
-      updatePayload.mailingListsExcluded = existingExcludedLists.map(id => parseInt(id));
-      console.log(`  Preserving excluded lists: ${updatePayload.mailingListsExcluded}`);
+      // Check if list is already included
+      if (currentIlsInclude.includes(legacyListIdStr) || currentIlsInclude.includes(parseInt(legacyListId))) {
+        console.log(`  ℹ️ List ${legacyListId} is already included in ILS lists`);
+        return res.json({
+          success: true,
+          message: 'List is already included in this email',
+          emailId: emailId,
+          listId: listId,
+          legacyListId: legacyListId
+        });
+      }
+
+      // Add the legacy list ID to ILS include list (as STRING - that's what the 'to' format uses!)
+      const updatedIlsInclude = [...new Set([...currentIlsInclude, legacyListIdStr])];
+
+      // Build the 'to' object payload
+      updatePayload = {
+        to: {
+          contactIds: currentEmail.to?.contactIds || { exclude: [], include: [] },
+          contactIlsLists: {
+            exclude: currentIlsExclude,
+            include: updatedIlsInclude
+          },
+          contactLists: {
+            exclude: currentListsExclude,
+            include: currentListsInclude
+          },
+          limitSendFrequency: currentEmail.to?.limitSendFrequency || false,
+          suppressGraymail: currentEmail.to?.suppressGraymail || false
+        }
+      };
+
+      console.log(`  Updated ILS include list: ${JSON.stringify(updatedIlsInclude)}`);
+
+    } else {
+      // Email uses the OLD 'mailingListsIncluded' format
+      console.log(`  Using 'mailingListsIncluded' format for list inclusion`);
+
+      const existingIncludedLists = [...new Set((currentEmail.mailingListsIncluded || []).map(id => parseInt(id)))];
+      const existingExcludedLists = (currentEmail.mailingListsExcluded || []).map(id => parseInt(id));
+
+      console.log(`  Current mailingListsIncluded: ${JSON.stringify(existingIncludedLists)}`);
+      console.log(`  Current mailingListsExcluded: ${JSON.stringify(existingExcludedLists)}`);
+
+      const legacyListIdInt = parseInt(legacyListId);
+
+      // Check if list is already included
+      if (existingIncludedLists.includes(legacyListIdInt)) {
+        console.log(`  ℹ️ List ${legacyListId} is already included`);
+        return res.json({
+          success: true,
+          message: 'List is already included in this email',
+          emailId: emailId,
+          listId: listId,
+          legacyListId: legacyListId
+        });
+      }
+
+      const updatedIncludeLists = [...new Set([...existingIncludedLists, legacyListIdInt])];
+
+      updatePayload = {
+        mailingListsIncluded: updatedIncludeLists
+      };
+
+      if (existingExcludedLists && existingExcludedLists.length > 0) {
+        updatePayload.mailingListsExcluded = existingExcludedLists;
+      }
     }
 
     console.log(`  Final payload:`, JSON.stringify(updatePayload, null, 2));
@@ -766,16 +888,73 @@ router.post('/include-list-in-email', ensureAuthenticated, async (req, res) => {
       { headers: hubspotHeaders }
     );
 
-    console.log(`✅ Successfully updated email using v3 API PATCH`);
+    console.log(`✅ PATCH request completed. Status: ${updateResponse.status}`);
+    console.log(`  Response data:`, JSON.stringify(updateResponse.data, null, 2));
 
-    // Return success immediately - no verification needed
+    // IMPORTANT: Verify the email was actually updated by fetching it again
+    console.log(`  🔍 Verifying email was updated...`);
+    await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second for HubSpot to process
+
+    const verifyResponse = await axios.get(
+      `https://api.hubapi.com/marketing/v3/emails/${emailId}`,
+      { headers: hubspotHeaders }
+    );
+
+    const verifiedEmail = verifyResponse.data;
+
+    // Check based on email format
+    let listWasAdded = false;
+    let actualIncludedLists = [];
+
+    if (verifiedEmail.to && (verifiedEmail.to.contactIlsLists || verifiedEmail.to.contactLists)) {
+      // Check 'to' object format
+      const verifiedIlsInclude = verifiedEmail.to?.contactIlsLists?.include || [];
+      const verifiedListsInclude = verifiedEmail.to?.contactLists?.include || [];
+
+      console.log(`  Verified ILS lists include: ${JSON.stringify(verifiedIlsInclude)}`);
+      console.log(`  Verified contact lists include: ${JSON.stringify(verifiedListsInclude)}`);
+
+      listWasAdded = verifiedIlsInclude.includes(legacyListIdStr) ||
+                     verifiedIlsInclude.includes(parseInt(legacyListId)) ||
+                     verifiedListsInclude.includes(legacyListIdStr) ||
+                     verifiedListsInclude.includes(parseInt(legacyListId));
+
+      actualIncludedLists = [...verifiedIlsInclude, ...verifiedListsInclude];
+    } else {
+      // Check 'mailingListsIncluded' format
+      actualIncludedLists = verifiedEmail.mailingListsIncluded || [];
+      console.log(`  Verified mailingListsIncluded: ${JSON.stringify(actualIncludedLists)}`);
+
+      listWasAdded = actualIncludedLists.includes(parseInt(legacyListId)) ||
+                     actualIncludedLists.includes(String(legacyListId));
+    }
+
+    if (!listWasAdded) {
+      console.log(`  ⚠️ WARNING: List ${legacyListId} was NOT found in verified email!`);
+      return res.json({
+        success: false,
+        message: `API request succeeded but list was not actually added to email. Please check the email in HubSpot.`,
+        emailId: emailId,
+        listId: listId,
+        legacyListId: legacyListId,
+        actualIncludedLists: actualIncludedLists,
+        verifiedEmailStructure: {
+          hasToObject: !!verifiedEmail.to,
+          hasMailingLists: !!verifiedEmail.mailingListsIncluded
+        }
+      });
+    }
+
+    console.log(`  ✅ Verification successful! List ${legacyListId} is now in the email.`);
+
     return res.json({
       success: true,
-      message: `List successfully added to email`,
+      message: `List successfully added to email and verified`,
       emailId: emailId,
       listId: listId,
-      updatedIncludedLists: updatedIncludeLists,
-      updatedExcludedLists: existingExcludedLists
+      legacyListId: legacyListId,
+      format: usesToFormat ? 'to object' : 'mailingLists',
+      actualIncludedLists: actualIncludedLists
     });
 
   } catch (error) {
@@ -804,6 +983,53 @@ router.post('/include-list-in-email', ensureAuthenticated, async (req, res) => {
       message: errorMessage,
       details: error.response?.data || error.message,
       suggestion: 'If this is a cloned email, you may need to add lists manually in the HubSpot UI'
+    });
+  }
+});
+
+// Debug endpoint to inspect email structure
+router.get('/debug-email/:emailId', ensureAuthenticated, async (req, res) => {
+  try {
+    const emailId = req.params.emailId;
+    console.log(`\n🔍 Debugging email: ${emailId}`);
+
+    const response = await axios.get(
+      `https://api.hubapi.com/marketing/v3/emails/${emailId}`,
+      { headers: hubspotHeaders }
+    );
+
+    const emailData = response.data;
+
+    // Extract all recipient-related fields
+    const recipientInfo = {
+      emailId: emailId,
+      name: emailData.name,
+      state: emailData.state,
+      mailingListsIncluded: emailData.mailingListsIncluded,
+      mailingListsExcluded: emailData.mailingListsExcluded,
+      to: emailData.to,
+      from: emailData.from,
+      replyTo: emailData.replyTo,
+      // Check for any other recipient fields
+      contactListIds: emailData.contactListIds,
+      listIds: emailData.listIds,
+      recipients: emailData.recipients,
+      audienceCriteria: emailData.audienceCriteria,
+      fullData: emailData // Include everything for inspection
+    };
+
+    console.log(`Email Debug Info:`, JSON.stringify(recipientInfo, null, 2));
+
+    res.json({
+      success: true,
+      data: recipientInfo
+    });
+
+  } catch (error) {
+    console.error('Debug error:', error.response?.data || error.message);
+    res.status(500).json({
+      success: false,
+      error: error.response?.data || error.message
     });
   }
 });

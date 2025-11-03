@@ -1042,7 +1042,15 @@
         }
 
         // Create associations between emails and lists with matching dates and similar names
-        function createAssociations() {
+        async function createAssociations() {
+            // Show loading notification
+            showNotification('Creating associations... Please wait', 'info');
+
+            // Disable button to prevent multiple clicks
+            const button = document.getElementById('create-associations');
+            button.disabled = true;
+            button.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Processing...';
+
             associations = [];
             let unmatchedEmails = [];
             let unmatchedLists = [];
@@ -1051,13 +1059,20 @@
             console.log(`Total Emails: ${emails.length}`);
             console.log(`Total Lists: ${lists.length}`);
 
-
             // Track which lists have been matched
             const matchedListIds = new Set();
 
-            emails.forEach(email => {
-                console.log(`\nProcessing Email: "${email.name}"`);
-                console.log(`  Email Date: ${email.date}`);
+            // Process emails in chunks to avoid blocking the UI
+            for (let emailIndex = 0; emailIndex < emails.length; emailIndex++) {
+                const email = emails[emailIndex];
+
+                // Update progress notification every 5 emails
+                if (emailIndex % 5 === 0 || emailIndex === emails.length - 1) {
+                    console.log(`📧 Processing ${emailIndex + 1}/${emails.length} emails...`);
+                    showNotification(`Processing ${emailIndex + 1}/${emails.length} emails...`, 'info');
+                    // Yield to browser every 5 emails to keep UI responsive
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                }
 
                 if (!email.date) {
                     unmatchedEmails.push({
@@ -1066,12 +1081,10 @@
                         id: email.id,
                         normalized: normalizeName(email.name)
                     });
-                    console.log('  ❌ No date found in email name');
-                    return;
+                    continue;
                 }
 
                 const normalizedEmailName = normalizeName(email.name);
-                console.log(`  Normalized Email Name: "${normalizedEmailName}"`);
 
                 let emailMatched = false;
                 let matchingLists = [];
@@ -1079,9 +1092,9 @@
                 let listsWithSameDate = [];
                 let listsWithDifferentDate = [];
 
-                lists.forEach(list => {
+                for (const list of lists) {
                     if (!list.date) {
-                        return; // Skip lists without dates
+                        continue;
                     }
 
                     const normalizedListName = normalizeName(list.name);
@@ -1095,6 +1108,16 @@
                             normalized: normalizedListName,
                             date: list.date
                         });
+
+                        // Only log detailed info for non-matching lists with same date (for debugging)
+                        if (!namesAreSimilar) {
+                            potentialMatches.push({
+                                listName: list.name,
+                                normalizedList: normalizedListName,
+                                normalizedEmail: normalizedEmailName,
+                                listDate: list.date
+                            });
+                        }
                     } else {
                         // Check if the normalized names match but dates don't
                         if (namesAreSimilar) {
@@ -1103,32 +1126,6 @@
                                 normalized: normalizedListName,
                                 date: list.date
                             });
-                        }
-                    }
-
-                    if (datesMatch) {
-                        console.log(`  Checking List: "${list.name}"`);
-                        console.log(`    List Date: ${list.date}`);
-                        console.log(`    Normalized List Name: "${normalizedListName}"`);
-                        console.log(`    Dates Match: ✓`);
-                        console.log(`    Names Similar: ${namesAreSimilar ? '✓' : '✗'}`);
-
-                        if (!namesAreSimilar) {
-                            potentialMatches.push({
-                                listName: list.name,
-                                normalizedList: normalizedListName,
-                                normalizedEmail: normalizedEmailName,
-                                listDate: list.date
-                            });
-                            console.log(`    Name mismatch details:`);
-                            console.log(`      Email (normalized): "${normalizedEmailName}"`);
-                            console.log(`      List (normalized): "${normalizedListName}"`);
-
-                            // Debug the parts breakdown
-                            const emailParts = normalizedEmailName.split('-').map(p => p.trim()).filter(p => p.length > 0);
-                            const listParts = normalizedListName.split('-').map(p => p.trim()).filter(p => p.length > 0);
-                            console.log(`      Email Parts: [${emailParts.map(p => '"' + p + '"').join(', ')}]`);
-                            console.log(`      List Parts: [${listParts.map(p => '"' + p + '"').join(', ')}]`);
                         }
                     }
 
@@ -1146,13 +1143,12 @@
                         matchingLists.push(list.name);
                         matchedListIds.add(list.id);
                         emailMatched = true;
-                        console.log(`    ✅ MATCH FOUND! Association created.`);
+                        // Only log matches, not every comparison
+                        console.log(`    ✅ MATCH: "${email.name}" ↔ "${list.name}"`);
                     }
-                });
+                }
 
-                if (emailMatched) {
-                    console.log(`  ✅ Email matched with ${matchingLists.length} list(s): ${matchingLists.join(', ')}`);
-                } else if (email.date) {
+                if (!emailMatched && email.date) {
                     let detailedReason = '';
 
                     if (listsWithSameDate.length > 0) {
@@ -1173,9 +1169,8 @@
                         listsWithSameDate: listsWithSameDate,
                         listsWithDifferentDate: listsWithDifferentDate
                     });
-                    console.log(`  ❌ No matching lists found for this email`);
                 }
-            });
+            }
 
             // Find unmatched lists
             lists.forEach(list => {
@@ -1221,6 +1216,13 @@
             if (associations.length > 0) {
                 updateInclusionStatistics();
             }
+
+            // Re-enable button
+            button.disabled = false;
+            button.innerHTML = '<i class="fas fa-link mr-2"></i>Create Associations';
+
+            // Show completion notification
+            showNotification(`Association creation complete! ${associations.length} matches found.`, 'success');
         }
 
         // Delete an association

@@ -104,8 +104,11 @@ async function cloneAndScheduleEmail(
   strategy = "smart",
   customOptions = {}
 ) {
+  let clonedEmail = null;
+  let cloneAttempted = false;
+
   try {
-    // First, get the original email with ALL properties including custom ones
+    // First, get the original email with ALL properties including custom ones and lists
     const response = await axios.get(`${BASE_URL}/${originalEmailId}`, {
       headers: {
         Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
@@ -119,6 +122,21 @@ async function cloneAndScheduleEmail(
 
     const originalEmail = response.data;
     const originalEmailName = originalEmail.name;
+
+    // Get the recipient configuration from the original email to copy it
+    // Check which format the email uses
+    const originalTo = originalEmail.to;
+    const originalMailingListsIncluded = originalEmail.mailingListsIncluded;
+
+    console.log(`📋 Original email recipient format:`);
+    if (originalTo) {
+      console.log(`   - Uses 'to' object format`);
+      console.log(`   - ILS lists include: ${JSON.stringify(originalTo.contactIlsLists?.include || [])}`);
+      console.log(`   - Contact lists include: ${JSON.stringify(originalTo.contactLists?.include || [])}`);
+    }
+    if (originalMailingListsIncluded) {
+      console.log(`   - Uses 'mailingListsIncluded' format: ${JSON.stringify(originalMailingListsIncluded)}`);
+    }
 
     // Extract custom HubSpot properties - try different possible locations
     let emailCategory = null;
@@ -192,49 +210,142 @@ async function cloneAndScheduleEmail(
 
     processedEmailsCache.add(newEmailName);
 
-    // Clone the email
-    const cloneResponse = await axios.post(
-      `${BASE_URL}/${originalEmailId}/clone`,
-      {},
-      {
+    // Clone the email using correct v3 API endpoint
+    // Ensure ID is a string as required by HubSpot API
+    console.log(`📤 Cloning API Request: POST ${BASE_URL}/clone`);
+    console.log(`📤 Request Body:`, JSON.stringify({ id: String(originalEmailId), cloneName: newEmailName, language: "en" }));
+
+    cloneAttempted = true;
+
+    try {
+      const cloneResponse = await axios({
+        method: 'POST',
+        url: `${BASE_URL}/clone`,
+        data: {
+          id: String(originalEmailId),
+          cloneName: newEmailName,
+          language: "en"
+        },
+        headers: {
+          'Authorization': `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      clonedEmail = cloneResponse.data;
+    } catch (cloneError) {
+      // Even if clone returns an error, check if the email was actually created
+      // Some HubSpot API responses return error codes even when successful
+      console.log(`⚠️ Clone request returned status ${cloneError.response?.status} - verifying...`);
+
+      // Wait a bit for HubSpot to process
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Check if the email exists in HubSpot
+      try {
+        const verifyResponse = await axios.get(`${BASE_URL}`, {
+          params: {
+            name: newEmailName,
+            limit: 1,
+          },
+          headers: {
+            Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (verifyResponse.data.results && verifyResponse.data.results.length > 0) {
+          clonedEmail = verifyResponse.data.results[0];
+          console.log(`✅ Email cloned successfully! Found ID: ${clonedEmail.id}`);
+          // Clear the error - email was actually created successfully
+        } else {
+          // Email was not cloned, throw the original error
+          console.error(`❌ Clone failed - email not found in HubSpot`);
+          throw cloneError;
+        }
+      } catch (verifyError) {
+        // Verification failed, throw original clone error
+        console.error(`❌ Verification failed: ${verifyError.message}`);
+        throw cloneError;
+      }
+    }
+
+    const publishDateTimestamp = clonedDate.getTime();
+
+    // Update the cloned email with recipient lists using the CORRECT format
+    try {
+      const updatePayload = {};
+
+      // Copy recipient configuration based on original email format
+      if (originalTo) {
+        // Use 'to' object format (modern format)
+        updatePayload.to = {
+          contactIds: originalTo.contactIds || { exclude: [], include: [] },
+          contactIlsLists: {
+            exclude: originalTo.contactIlsLists?.exclude || [],
+            include: originalTo.contactIlsLists?.include || []
+          },
+          contactLists: {
+            exclude: originalTo.contactLists?.exclude || [],
+            include: originalTo.contactLists?.include || []
+          },
+          limitSendFrequency: originalTo.limitSendFrequency || false,
+          suppressGraymail: originalTo.suppressGraymail || false
+        };
+        console.log(`📋 Copying 'to' object with ILS lists: ${JSON.stringify(updatePayload.to.contactIlsLists.include)}`);
+      } else if (originalMailingListsIncluded) {
+        // Use 'mailingListsIncluded' format (legacy format)
+        if (originalMailingListsIncluded.length > 0) {
+          updatePayload.mailingListsIncluded = originalMailingListsIncluded.map(id => parseInt(id));
+          console.log(`📋 Copying mailingListsIncluded: ${updatePayload.mailingListsIncluded}`);
+        }
+        if (originalEmail.mailingListsExcluded && originalEmail.mailingListsExcluded.length > 0) {
+          updatePayload.mailingListsExcluded = originalEmail.mailingListsExcluded.map(id => parseInt(id));
+        }
+      }
+
+      // Add custom properties
+      if (emailCategory !== null && emailCategory !== undefined) {
+        updatePayload.emailCategory = emailCategory;
+      }
+      if (mdlzBrand !== null && mdlzBrand !== undefined) {
+        updatePayload.mdlzBrand = mdlzBrand;
+      }
+
+      // Update the draft email using PATCH (correct method for updating drafts)
+      await axios.patch(`${BASE_URL}/${clonedEmail.id}/draft`, updatePayload, {
         headers: {
           Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
           "Content-Type": "application/json",
         },
+      });
+      console.log(`📝 Email draft updated with recipient lists and properties`);
+    } catch (updateError) {
+      console.error(`⚠️ Update error (email still cloned): ${updateError.response?.status} - ${updateError.message}`);
+      if (updateError.response?.data) {
+        console.error(`   Error details:`, updateError.response.data);
       }
-    );
-
-    const clonedEmail = cloneResponse.data;
-    const publishDateTimestamp = clonedDate.getTime();
-
-    // Build the update payload
-    const updateEmailData = {
-      name: newEmailName,
-      mailingIlsListsExcluded: [10469],
-      mailingIlsListsIncluded: [39067],
-      mailingListsExcluded: [6591],
-      mailingListsIncluded: [31189],
-      publishImmediately: false,
-      publishDate: publishDateTimestamp,
-      isGraymailSuppressionEnabled: false,
-    };
-
-    // Add custom properties to the update payload
-    // Use the exact internal property names that HubSpot expects
-    if (emailCategory !== null && emailCategory !== undefined) {
-      updateEmailData.emailCategory = emailCategory;
-    }
-    if (mdlzBrand !== null && mdlzBrand !== undefined) {
-      updateEmailData.mdlzBrand = mdlzBrand;
+      // Continue despite update error - the email was still cloned
     }
 
-    // Update the cloned email with custom properties
-    await axios.put(`${BASE_URL}/${clonedEmail.id}`, updateEmailData, {
-      headers: {
-        Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-    });
+    // Now schedule the email using a separate PUT request for publish settings
+    try {
+      const schedulePayload = {
+        publishImmediately: false,
+        publishDate: publishDateTimestamp
+      };
+
+      await axios.put(`${BASE_URL}/${clonedEmail.id}`, schedulePayload, {
+        headers: {
+          Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      });
+      console.log(`⏰ Email scheduled for ${clonedDate.toISOString()}`);
+    } catch (scheduleError) {
+      console.error(`⚠️ Scheduling error (email still cloned): ${scheduleError.message}`);
+      // Continue despite scheduling error
+    }
 
     // Save to MongoDB with enhanced error handling
     try {
@@ -248,7 +359,7 @@ async function cloneAndScheduleEmail(
       });
       await clonedEmailRecord.save();
     } catch (saveError) {
-      console.error(`Error saving to MongoDB: ${saveError.message}`);
+      console.error(`⚠️ MongoDB save error: ${saveError.message}`);
       // Continue despite save error - the email was still cloned in HubSpot
     }
 
@@ -262,8 +373,8 @@ async function cloneAndScheduleEmail(
     };
   } catch (error) {
     console.error(
-      `Error cloning email ${originalEmailId}:`,
-      error.response?.data || error.message
+      `❌ Error cloning email ${originalEmailId}:`,
+      error.response?.status || error.message
     );
     return {
       success: false,
@@ -569,11 +680,14 @@ async function cloneAndScheduleEmailOptimized(
   scheduledTime,
   strategy = "smart"
 ) {
+  let clonedEmail = null;
+  let cloneAttempted = false;
+
   try {
     console.log(`🔄 Cloning: ${originalEmailId} -> "${newEmailName}"`);
     console.log(`⏰ Scheduled for: ${scheduledTime.toISOString()} (${hour}:${minute < 10 ? '0' + minute : minute})`);
 
-    // Get original email with custom properties
+    // Get original email with custom properties and lists
     const response = await axios.get(`${BASE_URL}/${originalEmailId}`, {
       headers: {
         Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
@@ -590,48 +704,157 @@ async function cloneAndScheduleEmailOptimized(
     let emailCategory = originalEmail.emailCategory || originalEmail.properties?.emailCategory || originalEmail.properties?.["Email Category"];
     let mdlzBrand = originalEmail.mdlzBrand || originalEmail.properties?.mdlzBrand || originalEmail.properties?.["MDLZ Brand"];
 
-    // Clone the email
-    const cloneResponse = await axios.post(
-      `${BASE_URL}/${originalEmailId}/clone`,
-      {},
-      {
+    // Get the recipient configuration from the original email to copy it
+    // Check which format the email uses
+    const originalTo = originalEmail.to;
+    const originalMailingListsIncluded = originalEmail.mailingListsIncluded;
+
+    console.log(`📋 Original email recipient format:`);
+    if (originalTo) {
+      console.log(`   - Uses 'to' object format`);
+      console.log(`   - ILS lists include: ${JSON.stringify(originalTo.contactIlsLists?.include || [])}`);
+      console.log(`   - Contact lists include: ${JSON.stringify(originalTo.contactLists?.include || [])}`);
+    }
+    if (originalMailingListsIncluded) {
+      console.log(`   - Uses 'mailingListsIncluded' format: ${JSON.stringify(originalMailingListsIncluded)}`);
+    }
+
+    // Clone the email using correct v3 API endpoint
+    // Ensure ID is a string as required by HubSpot API
+    console.log(`📤 Cloning API Request: POST ${BASE_URL}/clone`);
+    console.log(`📤 Request Body:`, JSON.stringify({ id: String(originalEmailId), cloneName: newEmailName, language: "en" }));
+
+    cloneAttempted = true;
+
+    try {
+      const cloneResponse = await axios({
+        method: 'POST',
+        url: `${BASE_URL}/clone`,
+        data: {
+          id: String(originalEmailId),
+          cloneName: newEmailName,
+          language: "en"
+        },
+        headers: {
+          'Authorization': `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      clonedEmail = cloneResponse.data;
+    } catch (cloneError) {
+      // Even if clone returns an error, check if the email was actually created
+      // Some HubSpot API responses return error codes even when successful
+      console.log(`⚠️ Clone request returned status ${cloneError.response?.status} - verifying...`);
+
+      // Wait a bit for HubSpot to process
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Check if the email exists in HubSpot
+      try {
+        const verifyResponse = await axios.get(`${BASE_URL}`, {
+          params: {
+            name: newEmailName,
+            limit: 1,
+          },
+          headers: {
+            Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (verifyResponse.data.results && verifyResponse.data.results.length > 0) {
+          clonedEmail = verifyResponse.data.results[0];
+          console.log(`✅ Email cloned successfully! Found ID: ${clonedEmail.id}`);
+          // Clear the error - email was actually created successfully
+        } else {
+          // Email was not cloned, throw the original error
+          console.error(`❌ Clone failed - email not found in HubSpot`);
+          throw cloneError;
+        }
+      } catch (verifyError) {
+        // Verification failed, throw original clone error
+        console.error(`❌ Verification failed: ${verifyError.message}`);
+        throw cloneError;
+      }
+    }
+
+    const publishDateTimestamp = scheduledTime.getTime();
+
+    // Update the cloned email with recipient lists using the CORRECT format
+    try {
+      const updatePayload = {};
+
+      // Copy recipient configuration based on original email format
+      if (originalTo) {
+        // Use 'to' object format (modern format)
+        updatePayload.to = {
+          contactIds: originalTo.contactIds || { exclude: [], include: [] },
+          contactIlsLists: {
+            exclude: originalTo.contactIlsLists?.exclude || [],
+            include: originalTo.contactIlsLists?.include || []
+          },
+          contactLists: {
+            exclude: originalTo.contactLists?.exclude || [],
+            include: originalTo.contactLists?.include || []
+          },
+          limitSendFrequency: originalTo.limitSendFrequency || false,
+          suppressGraymail: originalTo.suppressGraymail || false
+        };
+        console.log(`📋 Copying 'to' object with ILS lists: ${JSON.stringify(updatePayload.to.contactIlsLists.include)}`);
+      } else if (originalMailingListsIncluded) {
+        // Use 'mailingListsIncluded' format (legacy format)
+        if (originalMailingListsIncluded.length > 0) {
+          updatePayload.mailingListsIncluded = originalMailingListsIncluded.map(id => parseInt(id));
+          console.log(`📋 Copying mailingListsIncluded: ${updatePayload.mailingListsIncluded}`);
+        }
+        if (originalEmail.mailingListsExcluded && originalEmail.mailingListsExcluded.length > 0) {
+          updatePayload.mailingListsExcluded = originalEmail.mailingListsExcluded.map(id => parseInt(id));
+        }
+      }
+
+      // Add custom properties
+      if (emailCategory !== null && emailCategory !== undefined) {
+        updatePayload.emailCategory = emailCategory;
+      }
+      if (mdlzBrand !== null && mdlzBrand !== undefined) {
+        updatePayload.mdlzBrand = mdlzBrand;
+      }
+
+      // Update the draft email using PATCH (correct method for updating drafts)
+      await axios.patch(`${BASE_URL}/${clonedEmail.id}/draft`, updatePayload, {
         headers: {
           Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
           "Content-Type": "application/json",
         },
+      });
+      console.log(`📝 Email draft updated with recipient lists and properties`);
+    } catch (updateError) {
+      console.error(`⚠️ Update error (email still cloned): ${updateError.response?.status} - ${updateError.message}`);
+      if (updateError.response?.data) {
+        console.error(`   Error details:`, updateError.response.data);
       }
-    );
-
-    const clonedEmail = cloneResponse.data;
-    const publishDateTimestamp = scheduledTime.getTime();
-
-    // Build update payload
-    const updateEmailData = {
-      name: newEmailName,
-      mailingIlsListsExcluded: [10469],
-      mailingIlsListsIncluded: [39067],
-      mailingListsExcluded: [6591],
-      mailingListsIncluded: [31189],
-      publishImmediately: false,
-      publishDate: publishDateTimestamp,
-      isGraymailSuppressionEnabled: false,
-    };
-
-    // Add custom properties if they exist
-    if (emailCategory !== null && emailCategory !== undefined) {
-      updateEmailData.emailCategory = emailCategory;
-    }
-    if (mdlzBrand !== null && mdlzBrand !== undefined) {
-      updateEmailData.mdlzBrand = mdlzBrand;
+      // Continue despite update error - the email was still cloned
     }
 
-    // Update the cloned email
-    await axios.put(`${BASE_URL}/${clonedEmail.id}`, updateEmailData, {
-      headers: {
-        Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-    });
+    // Now schedule the email using a separate PUT request for publish settings
+    try {
+      const schedulePayload = {
+        publishImmediately: false,
+        publishDate: publishDateTimestamp
+      };
+
+      await axios.put(`${BASE_URL}/${clonedEmail.id}`, schedulePayload, {
+        headers: {
+          Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      });
+      console.log(`⏰ Email scheduled for ${scheduledTime.toISOString()}`);
+    } catch (scheduleError) {
+      console.error(`⚠️ Scheduling error (email still cloned): ${scheduleError.message}`);
+      // Continue despite scheduling error
+    }
 
     // Save to MongoDB
     try {
@@ -656,7 +879,7 @@ async function cloneAndScheduleEmailOptimized(
       scheduledTime: scheduledTime.toISOString(),
     };
   } catch (error) {
-    console.error(`❌ Error cloning email ${originalEmailId}:`, error.response?.data || error.message);
+    console.error(`❌ Error cloning email ${originalEmailId}:`, error.response?.status || error.message);
     return {
       success: false,
       error: error.message,
