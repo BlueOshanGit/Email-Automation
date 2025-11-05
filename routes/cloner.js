@@ -276,14 +276,31 @@ async function cloneAndScheduleEmail(
     try {
       const updatePayload = {};
 
+      // HARDCODED LISTS - Always add these to every cloned email
+      const SEED_LIST_ID = 31189;  // Seed list - add to "Send to"
+      const EXCLUSION_LIST_ID = 6591;  // Unsubscribed/bounced/opt-outs - add to "Don't send to"
+
       // Copy recipient configuration based on original email format
       if (originalTo) {
         // Use 'to' object format (modern format)
+        const includeIlsLists = originalTo.contactIlsLists?.include || [];
+        const excludeIlsLists = originalTo.contactIlsLists?.exclude || [];
+
+        // Add seed list to include if not already present
+        if (!includeIlsLists.includes(SEED_LIST_ID)) {
+          includeIlsLists.push(SEED_LIST_ID);
+        }
+
+        // Add exclusion list to exclude if not already present
+        if (!excludeIlsLists.includes(EXCLUSION_LIST_ID)) {
+          excludeIlsLists.push(EXCLUSION_LIST_ID);
+        }
+
         updatePayload.to = {
           contactIds: originalTo.contactIds || { exclude: [], include: [] },
           contactIlsLists: {
-            exclude: originalTo.contactIlsLists?.exclude || [],
-            include: originalTo.contactIlsLists?.include || []
+            exclude: excludeIlsLists,
+            include: includeIlsLists
           },
           contactLists: {
             exclude: originalTo.contactLists?.exclude || [],
@@ -292,16 +309,27 @@ async function cloneAndScheduleEmail(
           limitSendFrequency: originalTo.limitSendFrequency || false,
           suppressGraymail: originalTo.suppressGraymail || false
         };
-        console.log(`📋 Copying 'to' object with ILS lists: ${JSON.stringify(updatePayload.to.contactIlsLists.include)}`);
+        console.log(`📋 Copying 'to' object with ILS lists (include): ${JSON.stringify(updatePayload.to.contactIlsLists.include)}`);
+        console.log(`📋 Copying 'to' object with ILS lists (exclude): ${JSON.stringify(updatePayload.to.contactIlsLists.exclude)}`);
       } else if (originalMailingListsIncluded) {
         // Use 'mailingListsIncluded' format (legacy format)
-        if (originalMailingListsIncluded.length > 0) {
-          updatePayload.mailingListsIncluded = originalMailingListsIncluded.map(id => parseInt(id));
-          console.log(`📋 Copying mailingListsIncluded: ${updatePayload.mailingListsIncluded}`);
+        const includedLists = originalMailingListsIncluded.map(id => parseInt(id));
+        const excludedLists = (originalEmail.mailingListsExcluded || []).map(id => parseInt(id));
+
+        // Add seed list to include if not already present
+        if (!includedLists.includes(SEED_LIST_ID)) {
+          includedLists.push(SEED_LIST_ID);
         }
-        if (originalEmail.mailingListsExcluded && originalEmail.mailingListsExcluded.length > 0) {
-          updatePayload.mailingListsExcluded = originalEmail.mailingListsExcluded.map(id => parseInt(id));
+
+        // Add exclusion list to exclude if not already present
+        if (!excludedLists.includes(EXCLUSION_LIST_ID)) {
+          excludedLists.push(EXCLUSION_LIST_ID);
         }
+
+        updatePayload.mailingListsIncluded = includedLists;
+        updatePayload.mailingListsExcluded = excludedLists;
+        console.log(`📋 Copying mailingListsIncluded: ${updatePayload.mailingListsIncluded}`);
+        console.log(`📋 Copying mailingListsExcluded: ${updatePayload.mailingListsExcluded}`);
       }
 
       // Add custom properties
@@ -319,7 +347,7 @@ async function cloneAndScheduleEmail(
           "Content-Type": "application/json",
         },
       });
-      console.log(`📝 Email draft updated with recipient lists and properties`);
+      console.log(`📝 Email draft updated with recipient lists`);
     } catch (updateError) {
       console.error(`⚠️ Update error (email still cloned): ${updateError.response?.status} - ${updateError.message}`);
       if (updateError.response?.data) {
@@ -328,23 +356,27 @@ async function cloneAndScheduleEmail(
       // Continue despite update error - the email was still cloned
     }
 
-    // Now schedule the email using a separate PUT request for publish settings
+    // Schedule the email using the /publish endpoint with sendAt parameter
+    // This will schedule the email to be sent at the specified time
     try {
       const schedulePayload = {
-        publishImmediately: false,
-        publishDate: publishDateTimestamp
+        sendAt: publishDateTimestamp
       };
 
-      await axios.put(`${BASE_URL}/${clonedEmail.id}`, schedulePayload, {
+      // Use the publish endpoint with sendAt to schedule the email
+      await axios.post(`https://api.hubapi.com/marketing/v3/emails/${clonedEmail.id}/publish`, schedulePayload, {
         headers: {
           Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
           "Content-Type": "application/json",
         },
       });
-      console.log(`⏰ Email scheduled for ${clonedDate.toISOString()}`);
+      console.log(`✅ Email scheduled successfully for ${clonedDate.toISOString()} (timestamp: ${publishDateTimestamp})`);
     } catch (scheduleError) {
-      console.error(`⚠️ Scheduling error (email still cloned): ${scheduleError.message}`);
-      // Continue despite scheduling error
+      console.error(`❌ Schedule error: ${scheduleError.response?.status} - ${scheduleError.message}`);
+      if (scheduleError.response?.data) {
+        console.error(`   Error details:`, JSON.stringify(scheduleError.response.data));
+      }
+      console.log(`ℹ️ Note: Email cloned successfully but scheduling failed. Please set time manually in HubSpot UI.`);
     }
 
     // Save to MongoDB with enhanced error handling
@@ -785,14 +817,31 @@ async function cloneAndScheduleEmailOptimized(
     try {
       const updatePayload = {};
 
+      // HARDCODED LISTS - Always add these to every cloned email
+      const SEED_LIST_ID = 31189;  // Seed list - add to "Send to"
+      const EXCLUSION_LIST_ID = 6591;  // Unsubscribed/bounced/opt-outs - add to "Don't send to"
+
       // Copy recipient configuration based on original email format
       if (originalTo) {
         // Use 'to' object format (modern format)
+        const includeIlsLists = originalTo.contactIlsLists?.include || [];
+        const excludeIlsLists = originalTo.contactIlsLists?.exclude || [];
+
+        // Add seed list to include if not already present
+        if (!includeIlsLists.includes(SEED_LIST_ID)) {
+          includeIlsLists.push(SEED_LIST_ID);
+        }
+
+        // Add exclusion list to exclude if not already present
+        if (!excludeIlsLists.includes(EXCLUSION_LIST_ID)) {
+          excludeIlsLists.push(EXCLUSION_LIST_ID);
+        }
+
         updatePayload.to = {
           contactIds: originalTo.contactIds || { exclude: [], include: [] },
           contactIlsLists: {
-            exclude: originalTo.contactIlsLists?.exclude || [],
-            include: originalTo.contactIlsLists?.include || []
+            exclude: excludeIlsLists,
+            include: includeIlsLists
           },
           contactLists: {
             exclude: originalTo.contactLists?.exclude || [],
@@ -801,16 +850,27 @@ async function cloneAndScheduleEmailOptimized(
           limitSendFrequency: originalTo.limitSendFrequency || false,
           suppressGraymail: originalTo.suppressGraymail || false
         };
-        console.log(`📋 Copying 'to' object with ILS lists: ${JSON.stringify(updatePayload.to.contactIlsLists.include)}`);
+        console.log(`📋 Copying 'to' object with ILS lists (include): ${JSON.stringify(updatePayload.to.contactIlsLists.include)}`);
+        console.log(`📋 Copying 'to' object with ILS lists (exclude): ${JSON.stringify(updatePayload.to.contactIlsLists.exclude)}`);
       } else if (originalMailingListsIncluded) {
         // Use 'mailingListsIncluded' format (legacy format)
-        if (originalMailingListsIncluded.length > 0) {
-          updatePayload.mailingListsIncluded = originalMailingListsIncluded.map(id => parseInt(id));
-          console.log(`📋 Copying mailingListsIncluded: ${updatePayload.mailingListsIncluded}`);
+        const includedLists = originalMailingListsIncluded.map(id => parseInt(id));
+        const excludedLists = (originalEmail.mailingListsExcluded || []).map(id => parseInt(id));
+
+        // Add seed list to include if not already present
+        if (!includedLists.includes(SEED_LIST_ID)) {
+          includedLists.push(SEED_LIST_ID);
         }
-        if (originalEmail.mailingListsExcluded && originalEmail.mailingListsExcluded.length > 0) {
-          updatePayload.mailingListsExcluded = originalEmail.mailingListsExcluded.map(id => parseInt(id));
+
+        // Add exclusion list to exclude if not already present
+        if (!excludedLists.includes(EXCLUSION_LIST_ID)) {
+          excludedLists.push(EXCLUSION_LIST_ID);
         }
+
+        updatePayload.mailingListsIncluded = includedLists;
+        updatePayload.mailingListsExcluded = excludedLists;
+        console.log(`📋 Copying mailingListsIncluded: ${updatePayload.mailingListsIncluded}`);
+        console.log(`📋 Copying mailingListsExcluded: ${updatePayload.mailingListsExcluded}`);
       }
 
       // Add custom properties
@@ -828,7 +888,7 @@ async function cloneAndScheduleEmailOptimized(
           "Content-Type": "application/json",
         },
       });
-      console.log(`📝 Email draft updated with recipient lists and properties`);
+      console.log(`📝 Email draft updated with recipient lists`);
     } catch (updateError) {
       console.error(`⚠️ Update error (email still cloned): ${updateError.response?.status} - ${updateError.message}`);
       if (updateError.response?.data) {
@@ -837,23 +897,27 @@ async function cloneAndScheduleEmailOptimized(
       // Continue despite update error - the email was still cloned
     }
 
-    // Now schedule the email using a separate PUT request for publish settings
+    // Schedule the email using the /schedule endpoint or /publish with sendAt
+    // This will publish and schedule the email at the specified time
     try {
       const schedulePayload = {
-        publishImmediately: false,
-        publishDate: publishDateTimestamp
+        sendAt: publishDateTimestamp
       };
 
-      await axios.put(`${BASE_URL}/${clonedEmail.id}`, schedulePayload, {
+      // Use the publish endpoint with sendAt to schedule the email
+      await axios.post(`https://api.hubapi.com/marketing/v3/emails/${clonedEmail.id}/publish`, schedulePayload, {
         headers: {
           Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
           "Content-Type": "application/json",
         },
       });
-      console.log(`⏰ Email scheduled for ${scheduledTime.toISOString()}`);
+      console.log(`✅ Email scheduled successfully for ${scheduledTime.toISOString()} (timestamp: ${publishDateTimestamp})`);
     } catch (scheduleError) {
-      console.error(`⚠️ Scheduling error (email still cloned): ${scheduleError.message}`);
-      // Continue despite scheduling error
+      console.error(`❌ Schedule error: ${scheduleError.response?.status} - ${scheduleError.message}`);
+      if (scheduleError.response?.data) {
+        console.error(`   Error details:`, JSON.stringify(scheduleError.response.data));
+      }
+      console.log(`ℹ️ Note: Email cloned successfully but scheduling failed. Please set time manually in HubSpot UI.`);
     }
 
     // Save to MongoDB
