@@ -8,6 +8,7 @@ const adminRoutes = require("./routes/adminRoutes.js");
 const hubspotListRoutes = require('./routes/hubspotRoute.js');
 const ClonerRoutes = require('./routes/cloner.js');
 const authRoutes = require('./routes/auth');
+const loginTrackingRoutes = require('./routes/loginTracking');
 
 const app = express();
 
@@ -55,6 +56,7 @@ app.use("/", authRoutes);         // 👈 Login & logout
 app.use("/", adminRoutes);        // 👈 Protected routes
 app.use('/api', hubspotListRoutes);
 app.use('/api', ClonerRoutes);
+app.use('/api/login-tracking', loginTrackingRoutes);  // 👈 Login tracking API
 
 // Test route (optional)
 app.get('/dashboard', (req, res) => {

@@ -1040,13 +1040,24 @@ router.post("/clone-emails", async (req, res) => {
 router.get("/cloned-emails", async (req, res) => {
   try {
     let query = {};
+
+    // Calculate date 31 days ago for retention policy
+    const retentionDate = new Date();
+    retentionDate.setDate(retentionDate.getDate() - 31);
+
     if (req.query.date) {
       // Parse date and filter for that day (00:00:00 to 23:59:59)
       const start = new Date(req.query.date);
       const end = new Date(start);
       end.setDate(start.getDate() + 1);
+      // Also apply 31-day retention filter
       query.scheduledTime = { $gte: start, $lt: end };
+      query.createdAt = { $gte: retentionDate };
+    } else {
+      // Only show last 31 days of emails
+      query.createdAt = { $gte: retentionDate };
     }
+
     const clonedEmails = await ClonedEmail.find(query).sort({ createdAt: -1 });
     res.json({
       success: true,

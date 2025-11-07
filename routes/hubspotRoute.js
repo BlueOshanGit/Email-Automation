@@ -615,8 +615,16 @@ router.get('/list-manager', ensureAuthenticated, async (req, res) => {
   try {
     const showAll = req.query.show === 'all';
     const jsonFormat = req.query.json === 'true';
-    const filter = showAll ? {} : { deleted: { $ne: true } };
-    
+
+    // Calculate date 31 days ago for retention policy
+    const retentionDate = new Date();
+    retentionDate.setDate(retentionDate.getDate() - 31);
+
+    // Filter: only last 31 days + not deleted
+    const filter = showAll
+      ? { createdDate: { $gte: retentionDate } }
+      : { deleted: { $ne: true }, createdDate: { $gte: retentionDate } };
+
     const lists = await CreatedList.find(filter)
       .sort({ createdDate: -1 })
       .lean();
@@ -653,8 +661,16 @@ router.get('/list-cleaner', ensureAuthenticated, async (req, res) => {
   try {
     const showAll = req.query.show === 'all';
     const jsonFormat = req.query.json === 'true';
-    const filter = showAll ? {} : { deleted: { $ne: true } };
-    
+
+    // Calculate date 31 days ago for retention policy
+    const retentionDate = new Date();
+    retentionDate.setDate(retentionDate.getDate() - 31);
+
+    // Filter: only last 31 days + not deleted
+    const filter = showAll
+      ? { createdDate: { $gte: retentionDate } }
+      : { deleted: { $ne: true }, createdDate: { $gte: retentionDate } };
+
     const lists = await CreatedList.find(filter)
       .sort({ createdDate: -1 })
       .lean();
@@ -1079,6 +1095,77 @@ router.get('/migration-guide/:legacyListId?', ensureAuthenticated, async (req, r
   };
 
   res.json(guide);
+});
+
+// Manual data retention cleanup endpoint - for testing or manual cleanup
+router.post('/cleanup-old-data', ensureAuthenticated, async (req, res) => {
+  try {
+    const { runDataRetentionCleanup } = require('../service/dataRetention');
+
+    console.log('[Manual Cleanup] Starting data retention cleanup...');
+    const results = await runDataRetentionCleanup();
+
+    res.json({
+      success: true,
+      message: 'Data cleanup completed successfully',
+      results: results
+    });
+  } catch (error) {
+    console.error('[Manual Cleanup] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to run data cleanup',
+      error: error.message
+    });
+  }
+});
+
+// Get data retention stats - shows what will be deleted
+router.get('/data-retention-stats', ensureAuthenticated, async (req, res) => {
+  try {
+    const { getRetentionCutoffDate, RETENTION_DAYS } = require('../service/dataRetention');
+    const cutoffDate = getRetentionCutoffDate();
+
+    // Count emails older than retention period
+    const oldEmailsCount = await require('../models/clonedEmail').countDocuments({
+      createdAt: { $lt: cutoffDate }
+    });
+
+    // Count lists older than retention period
+    const oldListsCount = await CreatedList.countDocuments({
+      createdDate: { $lt: cutoffDate }
+    });
+
+    // Count total emails and lists
+    const totalEmailsCount = await require('../models/clonedEmail').countDocuments({});
+    const totalListsCount = await CreatedList.countDocuments({});
+
+    res.json({
+      success: true,
+      retentionPolicy: {
+        retentionDays: RETENTION_DAYS,
+        cutoffDate: cutoffDate.toISOString(),
+        description: `Only data from the last ${RETENTION_DAYS} days is kept`
+      },
+      clonedEmails: {
+        total: totalEmailsCount,
+        willBeDeleted: oldEmailsCount,
+        willBeKept: totalEmailsCount - oldEmailsCount
+      },
+      createdLists: {
+        total: totalListsCount,
+        willBeDeleted: oldListsCount,
+        willBeKept: totalListsCount - oldListsCount
+      }
+    });
+  } catch (error) {
+    console.error('[Data Retention Stats] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get retention stats',
+      error: error.message
+    });
+  }
 });
 
 module.exports = router;
