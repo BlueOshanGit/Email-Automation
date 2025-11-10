@@ -180,32 +180,44 @@ const getContactsFromList = async (listId, maxCount = Infinity) => {
   return uniqueContacts;
 };
 
-// Fetch legacy segment ID for a given ILS list
+// Fetch legacy segment ID for a given ILS list using Search API
 const getLegacySegmentId = async (ilsListId) => {
   try {
     console.log(`  🔍 Fetching legacy segment ID for ILS list: ${ilsListId}`);
 
-    // Get list details from HubSpot v3 API
-    const res = await axios.get(
-      `https://api.hubapi.com/crm/v3/lists/${ilsListId}`,
+    // Use Search API with hs_classic_list_id property (the ONLY reliable way to get legacy ID)
+    const searchResponse = await axios.post(
+      `https://api.hubapi.com/crm/v3/lists/search`,
+      {
+        listIds: [String(ilsListId)],
+        additionalProperties: ["hs_classic_list_id"]
+      },
       { headers: hubspotHeaders }
     );
 
-    const listData = res.data.list || res.data;
+    if (searchResponse.data &&
+        searchResponse.data.lists &&
+        searchResponse.data.lists.length > 0) {
 
-    // The legacy segment ID is in the 'listId' field (confusingly named)
-    // While the ILS ID is typically in 'id' or returned as the creation response
-    const legacyId = listData.listId;
+      const listData = searchResponse.data.lists[0];
+      const legacyId = listData.additionalProperties?.hs_classic_list_id;
 
-    if (legacyId) {
-      console.log(`  ✅ Found legacy segment ID: ${legacyId}`);
-      return legacyId;
+      if (legacyId) {
+        console.log(`  ✅ Found legacy segment ID: ${legacyId} (ILS ID: ${ilsListId})`);
+        return legacyId;
+      } else {
+        console.log(`  ⚠️ No hs_classic_list_id in response for ILS list ${ilsListId}`);
+        return null;
+      }
+    } else {
+      console.log(`  ⚠️ No lists found in search response for ILS list ${ilsListId}`);
+      return null;
     }
-
-    console.log(`  ⚠️ No legacy segment ID found for ILS list ${ilsListId}`);
-    return null;
   } catch (error) {
     console.error(`  ❌ Failed to fetch legacy segment ID for ILS list ${ilsListId}:`, error.message);
+    if (error.response?.data) {
+      console.error(`  Error details:`, error.response.data);
+    }
     return null;
   }
 };
@@ -615,16 +627,8 @@ router.get('/list-manager', ensureAuthenticated, async (req, res) => {
   try {
     const showAll = req.query.show === 'all';
     const jsonFormat = req.query.json === 'true';
-
-    // Calculate date 31 days ago for retention policy
-    const retentionDate = new Date();
-    retentionDate.setDate(retentionDate.getDate() - 31);
-
-    // Filter: only last 31 days + not deleted
-    const filter = showAll
-      ? { createdDate: { $gte: retentionDate } }
-      : { deleted: { $ne: true }, createdDate: { $gte: retentionDate } };
-
+    const filter = showAll ? {} : { deleted: { $ne: true } };
+    
     const lists = await CreatedList.find(filter)
       .sort({ createdDate: -1 })
       .lean();
@@ -661,16 +665,8 @@ router.get('/list-cleaner', ensureAuthenticated, async (req, res) => {
   try {
     const showAll = req.query.show === 'all';
     const jsonFormat = req.query.json === 'true';
-
-    // Calculate date 31 days ago for retention policy
-    const retentionDate = new Date();
-    retentionDate.setDate(retentionDate.getDate() - 31);
-
-    // Filter: only last 31 days + not deleted
-    const filter = showAll
-      ? { createdDate: { $gte: retentionDate } }
-      : { deleted: { $ne: true }, createdDate: { $gte: retentionDate } };
-
+    const filter = showAll ? {} : { deleted: { $ne: true } };
+    
     const lists = await CreatedList.find(filter)
       .sort({ createdDate: -1 })
       .lean();
@@ -908,48 +904,66 @@ router.post('/include-list-in-email', ensureAuthenticated, async (req, res) => {
     console.log(`  Response data:`, JSON.stringify(updateResponse.data, null, 2));
 
     // IMPORTANT: Verify the email was actually updated by fetching it again
+    // Use retry logic because HubSpot can take time to propagate changes
     console.log(`  🔍 Verifying email was updated...`);
-    await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second for HubSpot to process
 
-    const verifyResponse = await axios.get(
-      `https://api.hubapi.com/marketing/v3/emails/${emailId}`,
-      { headers: hubspotHeaders }
-    );
-
-    const verifiedEmail = verifyResponse.data;
-
-    // Check based on email format
     let listWasAdded = false;
     let actualIncludedLists = [];
+    let verifiedEmail;
+    const maxRetries = 3;
+    const retryDelays = [2000, 3000, 5000]; // 2s, 3s, 5s delays
 
-    if (verifiedEmail.to && (verifiedEmail.to.contactIlsLists || verifiedEmail.to.contactLists)) {
-      // Check 'to' object format
-      const verifiedIlsInclude = verifiedEmail.to?.contactIlsLists?.include || [];
-      const verifiedListsInclude = verifiedEmail.to?.contactLists?.include || [];
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, retryDelays[attempt]));
 
-      console.log(`  Verified ILS lists include: ${JSON.stringify(verifiedIlsInclude)}`);
-      console.log(`  Verified contact lists include: ${JSON.stringify(verifiedListsInclude)}`);
+      console.log(`  Verification attempt ${attempt + 1}/${maxRetries}...`);
 
-      listWasAdded = verifiedIlsInclude.includes(legacyListIdStr) ||
-                     verifiedIlsInclude.includes(parseInt(legacyListId)) ||
-                     verifiedListsInclude.includes(legacyListIdStr) ||
-                     verifiedListsInclude.includes(parseInt(legacyListId));
+      const verifyResponse = await axios.get(
+        `https://api.hubapi.com/marketing/v3/emails/${emailId}`,
+        { headers: hubspotHeaders }
+      );
 
-      actualIncludedLists = [...verifiedIlsInclude, ...verifiedListsInclude];
-    } else {
-      // Check 'mailingListsIncluded' format
-      actualIncludedLists = verifiedEmail.mailingListsIncluded || [];
-      console.log(`  Verified mailingListsIncluded: ${JSON.stringify(actualIncludedLists)}`);
+      verifiedEmail = verifyResponse.data;
 
-      listWasAdded = actualIncludedLists.includes(parseInt(legacyListId)) ||
-                     actualIncludedLists.includes(String(legacyListId));
+      // Check based on email format
+      if (verifiedEmail.to && (verifiedEmail.to.contactIlsLists || verifiedEmail.to.contactLists)) {
+        // Check 'to' object format
+        const verifiedIlsInclude = verifiedEmail.to?.contactIlsLists?.include || [];
+        const verifiedListsInclude = verifiedEmail.to?.contactLists?.include || [];
+
+        console.log(`  Verified ILS lists include: ${JSON.stringify(verifiedIlsInclude)}`);
+        console.log(`  Verified contact lists include: ${JSON.stringify(verifiedListsInclude)}`);
+
+        listWasAdded = verifiedIlsInclude.includes(legacyListIdStr) ||
+                       verifiedIlsInclude.includes(parseInt(legacyListId)) ||
+                       verifiedListsInclude.includes(legacyListIdStr) ||
+                       verifiedListsInclude.includes(parseInt(legacyListId));
+
+        actualIncludedLists = [...verifiedIlsInclude, ...verifiedListsInclude];
+      } else {
+        // Check 'mailingListsIncluded' format
+        actualIncludedLists = verifiedEmail.mailingListsIncluded || [];
+        console.log(`  Verified mailingListsIncluded: ${JSON.stringify(actualIncludedLists)}`);
+
+        listWasAdded = actualIncludedLists.includes(parseInt(legacyListId)) ||
+                       actualIncludedLists.includes(String(legacyListId));
+      }
+
+      if (listWasAdded) {
+        console.log(`  ✅ List verified on attempt ${attempt + 1}`);
+        break;
+      }
+
+      if (attempt < maxRetries - 1) {
+        console.log(`  ⏳ List not found yet, waiting before retry...`);
+      }
     }
 
     if (!listWasAdded) {
-      console.log(`  ⚠️ WARNING: List ${legacyListId} was NOT found in verified email!`);
+      console.log(`  ⚠️ WARNING: List ${legacyListId} was NOT found after ${maxRetries} verification attempts!`);
       return res.json({
         success: false,
-        message: `API request succeeded but list was not actually added to email. Please check the email in HubSpot.`,
+        message: `API request succeeded but list was not found in email after ${maxRetries} verification attempts. The list may still be added - please check the email in HubSpot manually.`,
         emailId: emailId,
         listId: listId,
         legacyListId: legacyListId,
@@ -1097,72 +1111,97 @@ router.get('/migration-guide/:legacyListId?', ensureAuthenticated, async (req, r
   res.json(guide);
 });
 
-// Manual data retention cleanup endpoint - for testing or manual cleanup
-router.post('/cleanup-old-data', ensureAuthenticated, async (req, res) => {
+// Diagnostic endpoint - Check what IDs HubSpot returns for a list
+router.get('/debug-list-ids/:ilsListId', ensureAuthenticated, async (req, res) => {
+  const ilsListId = req.params.ilsListId;
+
   try {
-    const { runDataRetentionCleanup } = require('../service/dataRetention');
+    console.log(`\n🔍 DEBUG: Fetching all IDs for ILS list: ${ilsListId}`);
 
-    console.log('[Manual Cleanup] Starting data retention cleanup...');
-    const results = await runDataRetentionCleanup();
+    // Get list details from HubSpot v3 API
+    const hubspotResponse = await axios.get(
+      `https://api.hubapi.com/crm/v3/lists/${ilsListId}`,
+      { headers: hubspotHeaders }
+    );
 
-    res.json({
-      success: true,
-      message: 'Data cleanup completed successfully',
-      results: results
-    });
+    const listData = hubspotResponse.data.list || hubspotResponse.data;
+
+    // Check database
+    const dbRecord = await CreatedList.findOne({ listId: parseInt(ilsListId) });
+
+    const debugInfo = {
+      input: {
+        ilsListId: ilsListId
+      },
+      hubspotApiResponse: {
+        listId: listData.listId,
+        id: listData.id,
+        ilsListId: listData.ilsListId,
+        legacyListId: listData.legacyListId,
+        parentId: listData.parentId,
+        name: listData.name,
+        allKeys: Object.keys(listData)
+      },
+      database: dbRecord ? {
+        listId: dbRecord.listId,
+        legacyListId: dbRecord.legacyListId,
+        name: dbRecord.name
+      } : null,
+      recommendation: {
+        correctLegacyId: listData.legacyListId || listData.parentId || listData.listId,
+        needsUpdate: dbRecord && dbRecord.legacyListId !== (listData.legacyListId || listData.parentId || listData.listId),
+        note: "If HubSpot UI shows different 'LIST ID', that is the correct legacy segment ID to use for emails"
+      }
+    };
+
+    res.json(debugInfo);
   } catch (error) {
-    console.error('[Manual Cleanup] Error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to run data cleanup',
-      error: error.message
+      error: error.message,
+      note: 'Failed to fetch list details from HubSpot'
     });
   }
 });
 
-// Get data retention stats - shows what will be deleted
-router.get('/data-retention-stats', ensureAuthenticated, async (req, res) => {
+// Utility endpoint - Update legacy ID in database for a specific list
+router.post('/update-legacy-id', ensureAuthenticated, async (req, res) => {
+  const { ilsListId, correctLegacyId } = req.body;
+
+  if (!ilsListId || !correctLegacyId) {
+    return res.json({
+      success: false,
+      message: 'Both ilsListId and correctLegacyId are required'
+    });
+  }
+
   try {
-    const { getRetentionCutoffDate, RETENTION_DAYS } = require('../service/dataRetention');
-    const cutoffDate = getRetentionCutoffDate();
+    const listRecord = await CreatedList.findOne({ listId: parseInt(ilsListId) });
 
-    // Count emails older than retention period
-    const oldEmailsCount = await require('../models/clonedEmail').countDocuments({
-      createdAt: { $lt: cutoffDate }
-    });
+    if (!listRecord) {
+      return res.json({
+        success: false,
+        message: `No database record found for ILS list ID: ${ilsListId}`
+      });
+    }
 
-    // Count lists older than retention period
-    const oldListsCount = await CreatedList.countDocuments({
-      createdDate: { $lt: cutoffDate }
-    });
+    const oldLegacyId = listRecord.legacyListId;
+    listRecord.legacyListId = correctLegacyId;
+    await listRecord.save();
 
-    // Count total emails and lists
-    const totalEmailsCount = await require('../models/clonedEmail').countDocuments({});
-    const totalListsCount = await CreatedList.countDocuments({});
+    console.log(`✅ Updated legacy ID for list ${ilsListId}: ${oldLegacyId} → ${correctLegacyId}`);
 
     res.json({
       success: true,
-      retentionPolicy: {
-        retentionDays: RETENTION_DAYS,
-        cutoffDate: cutoffDate.toISOString(),
-        description: `Only data from the last ${RETENTION_DAYS} days is kept`
-      },
-      clonedEmails: {
-        total: totalEmailsCount,
-        willBeDeleted: oldEmailsCount,
-        willBeKept: totalEmailsCount - oldEmailsCount
-      },
-      createdLists: {
-        total: totalListsCount,
-        willBeDeleted: oldListsCount,
-        willBeKept: totalListsCount - oldListsCount
-      }
+      message: 'Legacy ID updated successfully',
+      ilsListId: ilsListId,
+      oldLegacyId: oldLegacyId,
+      newLegacyId: correctLegacyId,
+      listName: listRecord.name
     });
   } catch (error) {
-    console.error('[Data Retention Stats] Error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to get retention stats',
       error: error.message
     });
   }
