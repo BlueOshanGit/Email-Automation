@@ -1,7 +1,16 @@
 const express = require("express");
 const router = express.Router();
+const axios = require('axios');
 const Segmentation = require("../models/segmentation");
 const CreatedList = require("../models/list");
+const { runDataRetentionCleanup, getRetentionCutoffDate, RETENTION_DAYS } = require("../service/dataRetention");
+
+// HubSpot configuration
+const HUBSPOT_ACCESS_TOKEN = process.env.HUBSPOT_ACCESS_TOKEN;
+const hubspotHeaders = {
+  'Authorization': `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
+  'Content-Type': 'application/json'
+};
 
 // 🔒 Middleware to protect private routes
 function ensureAuthenticated(req, res, next) {
@@ -207,6 +216,214 @@ router.get('/report', ensureAuthenticated, async (req, res) => {
   } catch (err) {
     console.error("Report route failed:", err);
     res.status(500).json({ success: false });
+  }
+});
+
+// ✔️ DATA RETENTION - Manual cleanup trigger (protected)
+router.post('/data-retention/cleanup', ensureAuthenticated, async (req, res) => {
+  try {
+    console.log(`[Data Retention] Manual cleanup triggered by user: ${req.session.user}`);
+
+    const results = await runDataRetentionCleanup();
+
+    res.json({
+      success: true,
+      message: 'Data retention cleanup completed',
+      results: results,
+      summary: {
+        clonedEmailsDeleted: results.clonedEmails.deletedCount,
+        createdListsDeleted: results.createdLists.deletedCount,
+        totalDeleted: results.clonedEmails.deletedCount + results.createdLists.deletedCount,
+        retentionDays: RETENTION_DAYS
+      }
+    });
+  } catch (err) {
+    console.error("[Data Retention] Manual cleanup failed:", err);
+    res.status(500).json({
+      success: false,
+      message: 'Data retention cleanup failed',
+      error: err.message
+    });
+  }
+});
+
+// ✔️ DATA RETENTION - Get status (protected)
+router.get('/data-retention/status', ensureAuthenticated, async (req, res) => {
+  try {
+    const cutoffDate = getRetentionCutoffDate();
+
+    // Count how many records will be deleted
+    const clonedEmailsCount = await require("../models/clonedEmail").countDocuments({
+      createdAt: { $lt: cutoffDate }
+    });
+
+    const createdListsCount = await CreatedList.countDocuments({
+      createdDate: { $lt: cutoffDate }
+    });
+
+    res.json({
+      success: true,
+      retentionDays: RETENTION_DAYS,
+      cutoffDate: cutoffDate.toISOString(),
+      oldRecordsCounts: {
+        clonedEmails: clonedEmailsCount,
+        createdLists: createdListsCount,
+        total: clonedEmailsCount + createdListsCount
+      },
+      message: `${clonedEmailsCount + createdListsCount} records are older than ${RETENTION_DAYS} days and will be deleted on cleanup`
+    });
+  } catch (err) {
+    console.error("[Data Retention] Status check failed:", err);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+// ✔️ BATCH FIX LEGACY IDs - Fix all incorrect legacy IDs in database (protected)
+router.post('/fix-all-legacy-ids', ensureAuthenticated, async (req, res) => {
+  try {
+    console.log('\n═══════════════════════════════════════════════════════════');
+    console.log('🔧 BATCH LEGACY ID FIX STARTED');
+    console.log(`   Triggered by: ${req.session.user}`);
+    console.log('═══════════════════════════════════════════════════════════');
+
+    // Fetch all lists from database
+    const allLists = await CreatedList.find({}).lean();
+    console.log(`📋 Found ${allLists.length} lists in database\n`);
+
+    if (allLists.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No lists to process',
+        stats: { total: 0, fixed: 0, alreadyCorrect: 0, errors: 0 }
+      });
+    }
+
+    // Statistics
+    let totalProcessed = 0;
+    let totalFixed = 0;
+    let totalAlreadyCorrect = 0;
+    let totalErrors = 0;
+    const fixedLists = [];
+    const errorLists = [];
+
+    // Helper function to fetch legacy ID from HubSpot
+    const getLegacyIdFromHubSpot = async (ilsListId) => {
+      try {
+        const searchResponse = await axios.post(
+          `https://api.hubapi.com/crm/v3/lists/search`,
+          {
+            listIds: [String(ilsListId)],
+            additionalProperties: ["hs_classic_list_id"]
+          },
+          { headers: hubspotHeaders }
+        );
+
+        if (searchResponse.data?.lists?.length > 0) {
+          const legacyId = searchResponse.data.lists[0].additionalProperties?.hs_classic_list_id;
+          return legacyId || null;
+        }
+        return null;
+      } catch (error) {
+        console.error(`  ❌ API error for ILS ID ${ilsListId}:`, error.response?.status || error.message);
+        return null;
+      }
+    };
+
+    // Process each list
+    for (const list of allLists) {
+      totalProcessed++;
+      const ilsListId = list.listId;
+      const currentLegacyId = list.legacyListId;
+
+      console.log(`\n[${totalProcessed}/${allLists.length}] ${list.name}`);
+      console.log(`  ILS ID: ${ilsListId}, Current legacy ID: ${currentLegacyId || 'NULL'}`);
+
+      // Check if current legacy ID is same as ILS ID (this is WRONG!)
+      const isWrong = currentLegacyId && (
+        String(currentLegacyId) === String(ilsListId) ||
+        parseInt(currentLegacyId) === parseInt(ilsListId)
+      );
+
+      if (isWrong) {
+        console.log(`  ⚠️  Database has ILS ID as legacy ID - INCORRECT!`);
+      }
+
+      // Fetch correct legacy ID from HubSpot
+      const correctLegacyId = await getLegacyIdFromHubSpot(ilsListId);
+
+      if (!correctLegacyId) {
+        console.log(`  ❌ Could not fetch legacy ID from HubSpot`);
+        totalErrors++;
+        errorLists.push({
+          name: list.name,
+          ilsId: ilsListId,
+          reason: 'HubSpot API failed'
+        });
+
+        // Add delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 500));
+        continue;
+      }
+
+      // Check if we need to update
+      if (String(currentLegacyId) === String(correctLegacyId)) {
+        console.log(`  ✓  Already correct`);
+        totalAlreadyCorrect++;
+      } else {
+        console.log(`  🔧 Updating: ${currentLegacyId || 'NULL'} → ${correctLegacyId}`);
+
+        await CreatedList.updateOne(
+          { _id: list._id },
+          { $set: { legacyListId: correctLegacyId } }
+        );
+
+        console.log(`  ✅ Updated!`);
+        totalFixed++;
+        fixedLists.push({
+          name: list.name,
+          ilsId: ilsListId,
+          oldLegacyId: currentLegacyId,
+          newLegacyId: correctLegacyId
+        });
+      }
+
+      // Add delay between requests to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    // Print summary
+    console.log('\n═══════════════════════════════════════════════════════════');
+    console.log('📊 BATCH FIX SUMMARY');
+    console.log('═══════════════════════════════════════════════════════════');
+    console.log(`Total Lists Processed:     ${totalProcessed}`);
+    console.log(`✅ Already Correct:         ${totalAlreadyCorrect}`);
+    console.log(`🔧 Fixed:                   ${totalFixed}`);
+    console.log(`❌ Errors:                  ${totalErrors}`);
+    console.log('═══════════════════════════════════════════════════════════\n');
+
+    res.json({
+      success: true,
+      message: `Batch fix completed: ${totalFixed} lists updated, ${totalAlreadyCorrect} already correct, ${totalErrors} errors`,
+      stats: {
+        total: totalProcessed,
+        fixed: totalFixed,
+        alreadyCorrect: totalAlreadyCorrect,
+        errors: totalErrors
+      },
+      fixedLists: fixedLists,
+      errorLists: errorLists
+    });
+
+  } catch (err) {
+    console.error('\n❌ Batch fix failed:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Batch fix failed',
+      error: err.message
+    });
   }
 });
 
