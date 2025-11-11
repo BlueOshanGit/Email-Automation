@@ -772,78 +772,37 @@ router.post('/include-list-in-email', ensureAuthenticated, async (req, res) => {
       });
     }
 
-    // Determine email format
-    const usesToFormat = currentEmail.to && (currentEmail.to.contactIlsLists || currentEmail.to.contactLists);
-    const ilsListIdStr = String(listId);
-    let updatePayload;
+    // Use the modern 'to.contactLists' format with legacy IDs (proven to work)
+    const legacyListIdStr = String(legacyListId);
+    const currentListsInclude = currentEmail.to?.contactLists?.include || [];
+    const currentListsExclude = currentEmail.to?.contactLists?.exclude || [];
 
-    if (usesToFormat) {
-      // Modern 'to' object format - use ILS IDs
-      const currentIlsInclude = currentEmail.to?.contactIlsLists?.include || [];
-      const currentIlsExclude = currentEmail.to?.contactIlsLists?.exclude || [];
-      const currentListsInclude = currentEmail.to?.contactLists?.include || [];
-      const currentListsExclude = currentEmail.to?.contactLists?.exclude || [];
-
-      // Check if already included
-      if (currentIlsInclude.includes(ilsListIdStr) || currentIlsInclude.includes(parseInt(listId))) {
-        return res.json({
-          success: true,
-          message: 'List is already included in this email',
-          emailId: emailId,
-          ilsListId: listId,
-          legacyListId: legacyListId
-        });
-      }
-
-      // Add ILS ID to contactIlsLists
-      const updatedIlsLists = [...new Set([...currentIlsInclude, ilsListIdStr])];
-
-      updatePayload = {
-        to: {
-          contactIds: currentEmail.to?.contactIds || { exclude: [], include: [] },
-          contactIlsLists: {
-            exclude: currentIlsExclude,
-            include: updatedIlsLists
-          },
-          contactLists: {
-            exclude: currentListsExclude,
-            include: currentListsInclude
-          },
-          limitSendFrequency: currentEmail.to?.limitSendFrequency || false,
-          suppressGraymail: currentEmail.to?.suppressGraymail || false
-        }
-      };
-    } else {
-      // Old 'mailingListsIncluded' format
-      const existingIncludedLists = [...new Set((currentEmail.mailingListsIncluded || []).map(id => parseInt(id)))];
-      const existingExcludedLists = (currentEmail.mailingListsExcluded || []).map(id => parseInt(id));
-      const legacyListIdInt = parseInt(legacyListId);
-
-      // Check if already included
-      if (existingIncludedLists.includes(legacyListIdInt)) {
-        return res.json({
-          success: true,
-          message: 'List is already included in this email',
-          emailId: emailId,
-          listId: listId,
-          legacyListId: legacyListId
-        });
-      }
-
-      const updatedIncludeLists = [...new Set([...existingIncludedLists, legacyListIdInt])];
-
-      updatePayload = {
-        mailingListsIncluded: updatedIncludeLists
-      };
-
-      if (existingExcludedLists && existingExcludedLists.length > 0) {
-        updatePayload.mailingListsExcluded = existingExcludedLists;
-      }
+    // Check if already included
+    if (currentListsInclude.includes(legacyListIdStr) || currentListsInclude.includes(parseInt(legacyListId))) {
+      return res.json({
+        success: true,
+        message: 'List is already included in this email',
+        emailId: emailId,
+        ilsListId: listId,
+        legacyListId: legacyListId
+      });
     }
 
-    // Update the email
+    // Add legacy ID to contactLists.include
+    const updatedListsInclude = [...new Set([...currentListsInclude, legacyListIdStr])];
+
+    const updatePayload = {
+      to: {
+        contactLists: {
+          exclude: currentListsExclude,
+          include: updatedListsInclude
+        }
+      }
+    };
+
+    // Update the email using the proven curl pattern (without /draft)
     const updateResponse = await axios.patch(
-      `https://api.hubapi.com/marketing/v3/emails/${emailId}/draft`,
+      `https://api.hubapi.com/marketing/v3/emails/${emailId}`,
       updatePayload,
       { headers: hubspotHeaders }
     );
@@ -862,20 +821,13 @@ router.post('/include-list-in-email', ensureAuthenticated, async (req, res) => {
       );
 
       const verifiedEmail = verifyResponse.data;
+      const verifiedListsInclude = verifiedEmail.to?.contactLists?.include || [];
 
-      if (verifiedEmail.to && (verifiedEmail.to.contactIlsLists || verifiedEmail.to.contactLists)) {
-        const verifiedIlsInclude = verifiedEmail.to?.contactIlsLists?.include || [];
-        const verifiedListsInclude = verifiedEmail.to?.contactLists?.include || [];
+      // Check if the legacy ID was added to contactLists.include
+      listWasAdded = verifiedListsInclude.includes(legacyListIdStr) ||
+                     verifiedListsInclude.includes(parseInt(legacyListId));
 
-        listWasAdded = verifiedIlsInclude.includes(ilsListIdStr) ||
-                       verifiedIlsInclude.includes(parseInt(listId));
-
-        actualIncludedLists = [...verifiedIlsInclude, ...verifiedListsInclude];
-      } else {
-        actualIncludedLists = verifiedEmail.mailingListsIncluded || [];
-        listWasAdded = actualIncludedLists.includes(parseInt(legacyListId)) ||
-                       actualIncludedLists.includes(String(legacyListId));
-      }
+      actualIncludedLists = verifiedListsInclude;
 
       if (listWasAdded) {
         break;
