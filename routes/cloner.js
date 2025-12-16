@@ -272,44 +272,49 @@ async function cloneAndScheduleEmail(
 
     const publishDateTimestamp = clonedDate.getTime();
 
-    // Update the cloned email with recipient lists and scheduled time
+    // Update the cloned email with recipient lists and scheduled time using V3 API only
     try {
       // HARDCODED LISTS - ONLY these two lists will be used (clearing all original lists)
       const SEED_LIST_ID = 39067;  // Seed list - add to "Send to" (ILS ID)
       const EXCLUSION_LIST_ID = 10469;  // Unsubscribed/bounced/opt-outs - add to "Don't send to" (ILS ID)
 
-      // Build update payload with lists and scheduled publish date
-      // Try multiple property names for scheduled time (v3 API may use different names)
-      const updatePayload = {
-        // Use mailingListsIncluded/Excluded format (works with HubSpot Marketing Email API)
-        mailingListsIncluded: [SEED_LIST_ID],      // Send to - ONLY this list
-        mailingListsExcluded: [EXCLUSION_LIST_ID], // Don't send to - ONLY this list
-        // Try different property names for scheduled time in v3 API
-        publishDate: publishDateTimestamp,
-        sendAt: publishDateTimestamp,
-        scheduledSendTime: clonedDate.toISOString()
+      console.log(`📋 Setting lists - Send to: [${SEED_LIST_ID}], Don't send to: [${EXCLUSION_LIST_ID}]`);
+      console.log(`📅 Setting scheduled time: ${clonedDate.toISOString()} (timestamp: ${publishDateTimestamp})`);
+
+      // Build v3 API update payload with ONLY the specified lists (replacing all original lists)
+      const v3UpdatePayload = {
+        // Set recipient lists using v3 'to' object format - this REPLACES all existing lists
+        to: {
+          contactIlsLists: {
+            include: [SEED_LIST_ID],      // ONLY this list in "Send to"
+            exclude: [EXCLUSION_LIST_ID]  // ONLY this list in "Don't send to"
+          }
+        },
+        publishDate: publishDateTimestamp
       };
 
       // Add custom properties
       if (emailCategory !== null && emailCategory !== undefined) {
-        updatePayload.emailCategory = emailCategory;
+        v3UpdatePayload.emailCategory = emailCategory;
       }
       if (mdlzBrand !== null && mdlzBrand !== undefined) {
-        updatePayload.mdlzBrand = mdlzBrand;
+        v3UpdatePayload.mdlzBrand = mdlzBrand;
       }
 
-      console.log(`📋 Setting ONLY specified lists - Send to: [${SEED_LIST_ID}], Don't send to: [${EXCLUSION_LIST_ID}]`);
-      console.log(`📅 Trying to set scheduled time: ${clonedDate.toISOString()} (timestamp: ${publishDateTimestamp})`);
-      console.log(`📤 Update payload:`, JSON.stringify(updatePayload));
+      console.log(`📤 V3 API Update payload:`, JSON.stringify(v3UpdatePayload));
 
-      // Update the draft email using PATCH (correct method for updating drafts)
-      const updateResponse = await axios.patch(`${BASE_URL}/${clonedEmail.id}/draft`, updatePayload, {
-        headers: {
-          Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-      });
-      console.log(`📝 Email draft updated with recipient lists and publishDate. Response status: ${updateResponse.status}`);
+      // Update the draft email using PATCH (v3 API)
+      const updateResponse = await axios.patch(
+        `${BASE_URL}/${clonedEmail.id}/draft`,
+        v3UpdatePayload,
+        {
+          headers: {
+            Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      console.log(`📝 V3 API: Email draft updated with lists. Response status: ${updateResponse.status}`);
     } catch (updateError) {
       console.error(`⚠️ Update error (email still cloned): ${updateError.response?.status} - ${updateError.message}`);
       if (updateError.response?.data) {
@@ -755,44 +760,49 @@ async function cloneAndScheduleEmailOptimized(
 
     const publishDateTimestamp = scheduledTime.getTime();
 
-    // Update the cloned email with recipient lists and scheduled time
+    // Update the cloned email with recipient lists and scheduled time using V3 API only
     try {
       // HARDCODED LISTS - ONLY these two lists will be used (clearing all original lists)
       const SEED_LIST_ID = 39067;  // Seed list - add to "Send to" (ILS ID)
       const EXCLUSION_LIST_ID = 10469;  // Unsubscribed/bounced/opt-outs - add to "Don't send to" (ILS ID)
 
-      // Build update payload with lists and scheduled publish date
-      // Try multiple property names for scheduled time (v3 API may use different names)
-      const updatePayload = {
-        // Use mailingListsIncluded/Excluded format (works with HubSpot Marketing Email API)
-        mailingListsIncluded: [SEED_LIST_ID],      // Send to - ONLY this list
-        mailingListsExcluded: [EXCLUSION_LIST_ID], // Don't send to - ONLY this list
-        // Try different property names for scheduled time in v3 API
-        publishDate: publishDateTimestamp,
-        sendAt: publishDateTimestamp,
-        scheduledSendTime: scheduledTime.toISOString()
+      console.log(`📋 Setting lists - Send to: [${SEED_LIST_ID}], Don't send to: [${EXCLUSION_LIST_ID}]`);
+      console.log(`📅 Setting scheduled time: ${scheduledTime.toISOString()} (timestamp: ${publishDateTimestamp})`);
+
+      // Build v3 API update payload with ONLY the specified lists (replacing all original lists)
+      const v3UpdatePayload = {
+        // Set recipient lists using v3 'to' object format - this REPLACES all existing lists
+        to: {
+          contactIlsLists: {
+            include: [SEED_LIST_ID],      // ONLY this list in "Send to"
+            exclude: [EXCLUSION_LIST_ID]  // ONLY this list in "Don't send to"
+          }
+        },
+        publishDate: publishDateTimestamp
       };
 
       // Add custom properties
       if (emailCategory !== null && emailCategory !== undefined) {
-        updatePayload.emailCategory = emailCategory;
+        v3UpdatePayload.emailCategory = emailCategory;
       }
       if (mdlzBrand !== null && mdlzBrand !== undefined) {
-        updatePayload.mdlzBrand = mdlzBrand;
+        v3UpdatePayload.mdlzBrand = mdlzBrand;
       }
 
-      console.log(`📋 Setting ONLY specified lists - Send to: [${SEED_LIST_ID}], Don't send to: [${EXCLUSION_LIST_ID}]`);
-      console.log(`📅 Trying to set scheduled time: ${scheduledTime.toISOString()} (timestamp: ${publishDateTimestamp})`);
-      console.log(`📤 Update payload:`, JSON.stringify(updatePayload));
+      console.log(`📤 V3 API Update payload:`, JSON.stringify(v3UpdatePayload));
 
-      // Update the draft email using PATCH (correct method for updating drafts)
-      const updateResponse = await axios.patch(`${BASE_URL}/${clonedEmail.id}/draft`, updatePayload, {
-        headers: {
-          Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-      });
-      console.log(`📝 Email draft updated with recipient lists and publishDate. Response status: ${updateResponse.status}`);
+      // Update the draft email using PATCH (v3 API)
+      const updateResponse = await axios.patch(
+        `${BASE_URL}/${clonedEmail.id}/draft`,
+        v3UpdatePayload,
+        {
+          headers: {
+            Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      console.log(`📝 V3 API: Email draft updated with lists. Response status: ${updateResponse.status}`);
     } catch (updateError) {
       console.error(`⚠️ Update error (email still cloned): ${updateError.response?.status} - ${updateError.message}`);
       if (updateError.response?.data) {
