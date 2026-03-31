@@ -1,12 +1,5 @@
-<!DOCTYPE html>
-<html lang="en">
-
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Email Publisher Dashboard</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
-  <style>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+<style>
     :root {
       --primary-color: #2c3e50;
       --secondary-color: #3498db;
@@ -24,69 +17,9 @@
       --white: #ffffff;
     }
 
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      outline: none !important;
+    .email-publisher-container {
+      padding: 10px 0;
     }
-
-    *:focus {
-      outline: none !important;
-      box-shadow: none !important;
-    }
-
-    input:focus,
-    select:focus,
-    button:focus,
-    textarea:focus {
-      outline: none !important;
-      box-shadow: none !important;
-      border-color: inherit !important;
-    }
-
-    body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      background: linear-gradient(135deg, var(--light-bg) 0%, #f5f9ff 100%);
-      margin: 0;
-      padding: 20px;
-      min-height: 100vh;
-      color: var(--dark-text);
-    }
-
-    .container {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 20px;
-      width: 100%;
-      max-width: 1200px;
-      margin: 0 auto;
-      animation: fadeIn 0.5s ease-out;
-    }
-
-    .panel {
-      background-color: var(--white);
-      border-radius: 12px;
-      box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
-      padding: 25px;
-      flex: 1;
-      min-width: 300px;
-      transition: transform 0.3s ease, box-shadow 0.3s ease;
-    }
-
-    .panel:hover {
-      transform: translateY(-5px);
-      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.15);
-    }
-
-    .left-panel {
-      flex: 2;
-    }
-
-    .right-panel {
-      flex: 1;
-    }
-
 
     .dashboard-wrapper {
       max-width: 1400px;
@@ -1221,14 +1154,12 @@
       display: none;
     }
   </style>
-</head>
 
-<body>
   <div class="email-publisher-container">
     <div class="dashboard-wrapper">
       <!-- Page Header -->
       <div class="page-header">
-        <h1><i class="fas fa-paper-plane"></i> Email Publisher Dashboard</h1>
+        <h1><i class="bi bi-send"></i> Email Publisher Dashboard</h1>
       </div>
 
       <!-- Main Content -->
@@ -1431,15 +1362,6 @@
       }
       return null;
     }
-
-    // Mock data for demonstration
-    const mockEmails = [
-      { clonedEmailId: "EM001", clonedEmailName: "Newsletter 15 Sep 2023", name: "Newsletter 15 Sep 2023", scheduledTime: "2023-09-15T12:00:00Z" },
-      { clonedEmailId: "EM002", clonedEmailName: "Promotion 16 Sep 2023", name: "Promotion 16 Sep 2023", scheduledTime: "2023-09-16T12:00:00Z" },
-      { clonedEmailId: "EM003", clonedEmailName: "Update 17 Sep 2023", name: "Update 17 Sep 2023", scheduledTime: "2023-09-17T12:00:00Z" },
-      { clonedEmailId: "EM004", clonedEmailName: "Weekly Digest 18 Sep 2023", name: "Weekly Digest 18 Sep 2023", scheduledTime: "2023-09-18T12:00:00Z" },
-      { clonedEmailId: "EM005", clonedEmailName: "Special Offer 19 Sep 2023", name: "Special Offer 19 Sep 2023", scheduledTime: "2023-09-19T12:00:00Z" }
-    ];
 
     // Store the current email data
     let currentEmails = [];
@@ -1707,18 +1629,8 @@
         const res = await fetch('/api/cloned-emails');
 
         if (!res.ok) {
-          // If the endpoint doesn't exist, use mock data
-          console.warn('API endpoint /api/cloned-emails not found, using mock data');
-
-          // Filter mock emails by extracted date
-          currentEmails = mockEmails.filter(e => {
-            let extracted = extractDateFromEmailName(e.name);
-            if (!extracted && e.scheduledTime) {
-              // fallback to scheduledTime (assume ISO string)
-              extracted = formatDate(e.scheduledTime);
-            }
-            return extracted === targetDateStr;
-          });
+          console.error('API endpoint /api/cloned-emails returned error:', res.status);
+          currentEmails = [];
         } else {
           // Use the actual API data
           const data = await res.json();
@@ -1726,7 +1638,7 @@
           if (data.success && Array.isArray(data.data)) {
             // Filter emails by extracted date (from name or scheduledTime)
             currentEmails = data.data.filter(e => {
-              let extracted = extractDateFromEmailName(e.name);
+              let extracted = extractDateFromEmailName(e.clonedEmailName);
               if (!extracted && e.scheduledTime) {
                 // fallback to scheduledTime (assume ISO string)
                 extracted = formatDate(e.scheduledTime);
@@ -1808,18 +1720,23 @@
               const checkbox = emailItem.querySelector('.email-checkbox');
 
               if (this.classList.contains('active')) {
-                // Cancel republish - make it published again
+                // Cancel republish - restore published state
                 this.classList.remove('active');
                 this.innerHTML = '<i class="bi bi-arrow-clockwise"></i> Republish';
                 emailItem.classList.add('published');
                 checkbox.disabled = true;
+                checkbox.checked = false;
                 selectedEmailIds.delete(emailId);
+                publishedEmailIds.add(emailId);
+                localStorage.setItem('publishedEmailIds', JSON.stringify(Array.from(publishedEmailIds)));
               } else {
-                // Enable republish - make it available for selection
+                // Enable republish - remove from published, enable selection
                 this.classList.add('active');
                 this.innerHTML = '<i class="bi bi-x"></i> Cancel';
                 emailItem.classList.remove('published');
                 checkbox.disabled = false;
+                publishedEmailIds.delete(emailId);
+                localStorage.setItem('publishedEmailIds', JSON.stringify(Array.from(publishedEmailIds)));
               }
 
               updateSelectedEmails();
@@ -1878,7 +1795,6 @@
     // Publish emails
     document.getElementById('publishBtn').addEventListener('click', async function () {
       const scheduleTime = null; // Always publish immediately
-      const resultsSection = document.getElementById('resultsSection');
       const resultsList = document.getElementById('resultsList');
       const publishedCount = document.getElementById('publishedCount');
 
@@ -1955,34 +1871,35 @@
                 if (!existingToggle) {
                   const badgeContainer = emailItem.querySelector('div[style*="display: flex"]');
                   if (badgeContainer) {
-                    badgeContainer.innerHTML = `
-                      <button class="republish-toggle" data-email-id="${emailId}">
-                        <i class="bi bi-arrow-clockwise"></i> Republish
-                      </button>
-                      ${badgeContainer.innerHTML}
-                    `;
+                    const badge = badgeContainer.querySelector('.email-badge');
+                    const republishBtn = document.createElement('button');
+                    republishBtn.className = 'republish-toggle';
+                    republishBtn.setAttribute('data-email-id', emailId);
+                    republishBtn.innerHTML = '<i class="bi bi-arrow-clockwise"></i> Republish';
+                    badgeContainer.insertBefore(republishBtn, badge);
 
-                    // Add event listener to the new toggle
-                    const newToggle = emailItem.querySelector('.republish-toggle');
-                    newToggle.addEventListener('click', function(e) {
+                    republishBtn.addEventListener('click', function(e) {
                       e.stopPropagation();
-                      const emailId = this.getAttribute('data-email-id');
-                      const emailItem = this.closest('.email-item');
-                      const checkbox = emailItem.querySelector('.email-checkbox');
+                      const eid = this.getAttribute('data-email-id');
+                      const eItem = this.closest('.email-item');
+                      const cb = eItem.querySelector('.email-checkbox');
 
                       if (this.classList.contains('active')) {
-                        // Cancel republish - make it published again
                         this.classList.remove('active');
                         this.innerHTML = '<i class="bi bi-arrow-clockwise"></i> Republish';
-                        emailItem.classList.add('published');
-                        checkbox.disabled = true;
-                        selectedEmailIds.delete(emailId);
+                        eItem.classList.add('published');
+                        cb.disabled = true;
+                        cb.checked = false;
+                        selectedEmailIds.delete(eid);
+                        publishedEmailIds.add(eid);
+                        localStorage.setItem('publishedEmailIds', JSON.stringify(Array.from(publishedEmailIds)));
                       } else {
-                        // Enable republish - make it available for selection
                         this.classList.add('active');
                         this.innerHTML = '<i class="bi bi-x"></i> Cancel';
-                        emailItem.classList.remove('published');
-                        checkbox.disabled = false;
+                        eItem.classList.remove('published');
+                        cb.disabled = false;
+                        publishedEmailIds.delete(eid);
+                        localStorage.setItem('publishedEmailIds', JSON.stringify(Array.from(publishedEmailIds)));
                       }
 
                       updateSelectedEmails();
@@ -1996,8 +1913,21 @@
 
               successCount++;
             } else {
-              resultItem.className = 'result-item error';
-              resultItem.innerHTML = `<i class="bi bi-exclamation-circle"></i> <strong>Email ID ${emailId}:</strong> ${data.message || 'Failed to publish'}`;
+              // Check if it's an approval-related rejection
+              if (data.approvalStatus && data.approvalStatus !== 'unknown') {
+                const iconMap = {
+                  'pending': 'bi-hourglass-split',
+                  'no_approval_requested': 'bi-shield-exclamation',
+                  'session_expired': 'bi-key',
+                };
+                const icon = iconMap[data.approvalStatus] || 'bi-exclamation-circle';
+                resultItem.className = 'result-item error';
+                resultItem.style.borderLeftColor = data.approvalStatus === 'pending' ? '#f39c12' : '#e74c3c';
+                resultItem.innerHTML = `<i class="bi ${icon}"></i> <strong>Email ID ${emailId}:</strong> ${data.message}`;
+              } else {
+                resultItem.className = 'result-item error';
+                resultItem.innerHTML = `<i class="bi bi-exclamation-circle"></i> <strong>Email ID ${emailId}:</strong> ${data.message || 'Failed to publish'}`;
+              }
             }
           } catch (error) {
             resultItem.className = 'result-item error';
@@ -2188,30 +2118,5 @@
           loadBtn.click();
         }
       }, 100);
-
-      // Add some sample results for demonstration
-      setTimeout(() => {
-        // This is just for demo purposes - would be removed in production
-        if (window.location.search.includes('demo=true')) {
-          const resultsSection = document.getElementById('resultsSection');
-          const resultsList = document.getElementById('resultsList');
-
-          resultsSection.classList.remove('d-none');
-          resultsList.innerHTML = `
-            <div class="result-item success">
-              <i class="bi bi-check-circle"></i> <strong>Email ID EM001:</strong> Published successfully
-            </div>
-            <div class="result-item success">
-              <i class="bi bi-check-circle"></i> <strong>Email ID EM002:</strong> Scheduled for ${new Date(Date.now() + 86400000).toLocaleString()}
-            </div>
-            <div class="result-item error">
-              <i class="bi bi-exclamation-circle"></i> <strong>Email ID EM003:</strong> Email template not found
-            </div>
-          `;
-        }
-      }, 1000);
     });
   </script>
-</body>
-
-</html>

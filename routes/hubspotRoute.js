@@ -173,7 +173,11 @@ const getContactsFromList = async (listId, maxCount = Infinity) => {
     }
   } else if (isLegacyList) {
     // If detected as legacy list via 404, use v1 API
-    allContacts = await getContactsFromLegacyList(listId, maxCount);
+    try {
+      allContacts = await getContactsFromLegacyList(listId, maxCount);
+    } catch (legacyError) {
+      console.error(`❌ Legacy list ${listId} error: ${legacyError.message}`);
+    }
   }
 
   const uniqueContacts = [...new Set(allContacts)];
@@ -523,7 +527,7 @@ const processCampaignsWithDelay = async (listConfigs, daysFilter, modeFilter) =>
 };
 
 // Updated route handler with better validation
-router.post('/create-lists', async (req, res) => {
+router.post('/create-lists', ensureAuthenticated, async (req, res) => {
   try {
     const { daysFilter, modeFilter } = req.body;
     console.log(`📨 Received request to create lists | Filters → Days: ${daysFilter}, Mode: ${modeFilter}`);
@@ -602,7 +606,7 @@ router.post('/create-lists', async (req, res) => {
 });
 
 // Rest of the routes remain unchanged
-router.get('/created-lists', async (req, res) => {
+router.get('/created-lists', ensureAuthenticated, async (req, res) => {
   try {
     const now = new Date();
     const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -660,43 +664,6 @@ router.get('/list-manager', ensureAuthenticated, async (req, res) => {
   }
 });
 
-// Keep old route for backward compatibility
-router.get('/list-cleaner', ensureAuthenticated, async (req, res) => {
-  try {
-    const showAll = req.query.show === 'all';
-    const jsonFormat = req.query.json === 'true';
-    const filter = showAll ? {} : { deleted: { $ne: true } };
-    
-    const lists = await CreatedList.find(filter)
-      .sort({ createdDate: -1 })
-      .lean();
-
-    const formattedLists = lists.map(list => ({
-      ...list,
-      formattedDate: formatDateForDisplay(list.createdDate),
-      createdDate: list.createdDate
-    }));
-
-    // Always return JSON when json=true is specified
-    if (jsonFormat) {
-      return res.json(formattedLists);
-    }
-
-    return res.render('deletedLists', {
-      lists: formattedLists,
-      showAll,
-      pageTitle: "List Cleaner",
-      activePage: "list cleaning"
-    });
-
-  } catch (error) {
-    console.error('Error:', error);
-    if (req.query.json === 'true') {
-      return res.status(500).json({ error: 'Server error' });
-    }
-    return res.status(500).send('Server error');
-  }
-});
 // Date formatting helper
 function formatDateForDisplay(date) {
   const d = new Date(date);

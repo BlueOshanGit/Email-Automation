@@ -6,9 +6,24 @@ require("dotenv").config();
 
 const HUBSPOT_ACCESS_TOKEN = process.env.HUBSPOT_ACCESS_TOKEN;
 const BASE_URL = process.env.BASE_URL;
+const HUBSPOT_PORTAL_ID = process.env.HUBSPOT_PORTAL_ID || "5686032";
+
+// Timezone offset for email scheduling (in minutes ahead of UTC)
+// IST = 330 (UTC+5:30), EST = -300 (UTC-5), UTC = 0
+// Set SCHEDULE_TZ_OFFSET in .env to override (defaults to server's local timezone)
+const SCHEDULE_TZ_OFFSET = parseInt(process.env.SCHEDULE_TZ_OFFSET || String(-(new Date().getTimezoneOffset())));
+console.log(`📍 Scheduling timezone offset: UTC${SCHEDULE_TZ_OFFSET >= 0 ? '+' : ''}${Math.floor(SCHEDULE_TZ_OFFSET/60)}:${String(Math.abs(SCHEDULE_TZ_OFFSET%60)).padStart(2,'0')}`);
 
 // Import your ClonedEmail model
 const ClonedEmail = require("../models/clonedEmail");
+
+// Authentication middleware
+function ensureAuthenticated(req, res, next) {
+  if (!req.session.user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  next();
+}
 
 const processedEmailsCache = new Set();
 
@@ -73,327 +88,6 @@ async function batchCheckEmailsExist(emailNames) {
     return existsMap;
   }
 }
-
-// Keep single check for fallback
-async function checkEmailExists(emailName) {
-  try {
-    const response = await axios.get(`${BASE_URL}`, {
-      params: {
-        name: emailName,
-        limit: 1,
-      },
-      headers: {
-        Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    const exists = response.data.total > 0 || (response.data.results && response.data.results.length > 0);
-    return exists;
-  } catch (error) {
-    console.error(`Error checking email existence for "${emailName}":`, error.response?.data || error.message);
-    return false;
-  }
-}
-
-async function cloneAndScheduleEmail(
-  originalEmailId,
-  dayOffset,
-  hour,
-  minute,
-  strategy = "smart",
-  customOptions = {}
-) {
-  let clonedEmail = null;
-  let cloneAttempted = false;
-
-  try {
-    // First, get the original email with ALL properties including custom ones and lists
-    const response = await axios.get(`${BASE_URL}/${originalEmailId}`, {
-      headers: {
-        Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      // IMPORTANT: Use the properties parameter to get custom properties
-      params: {
-        properties: "name,emailCategory,mdlzBrand" // Add all custom properties here
-      }
-    });
-
-    const originalEmail = response.data;
-    const originalEmailName = originalEmail.name;
-
-    // Get the recipient configuration from the original email to copy it
-    // Check which format the email uses
-    const originalTo = originalEmail.to;
-    const originalMailingListsIncluded = originalEmail.mailingListsIncluded;
-
-    console.log(`📋 Original email recipient format:`);
-    if (originalTo) {
-      console.log(`   - Uses 'to' object format`);
-      console.log(`   - ILS lists include: ${JSON.stringify(originalTo.contactIlsLists?.include || [])}`);
-      console.log(`   - Contact lists include: ${JSON.stringify(originalTo.contactLists?.include || [])}`);
-    }
-    if (originalMailingListsIncluded) {
-      console.log(`   - Uses 'mailingListsIncluded' format: ${JSON.stringify(originalMailingListsIncluded)}`);
-    }
-
-    // Extract custom HubSpot properties - try different possible locations
-    let emailCategory = null;
-    let mdlzBrand = null;
-
-    // Method 1: Check if properties are in the root object
-    if (originalEmail.emailCategory !== undefined) {
-      emailCategory = originalEmail.emailCategory;
-    }
-    if (originalEmail.mdlzBrand !== undefined) {
-      mdlzBrand = originalEmail.mdlzBrand;
-    }
-
-    // Method 2: Check if properties are in a properties object (common HubSpot pattern)
-    if (originalEmail.properties && originalEmail.properties.emailCategory) {
-      emailCategory = originalEmail.properties.emailCategory;
-    }
-    if (originalEmail.properties && originalEmail.properties.mdlzBrand) {
-      mdlzBrand = originalEmail.properties.mdlzBrand;
-    }
-
-    // Method 3: Check for different property name formats
-    if (originalEmail.properties && originalEmail.properties["Email Category"]) {
-      emailCategory = originalEmail.properties["Email Category"];
-    }
-    if (originalEmail.properties && originalEmail.properties["MDLZ Brand"]) {
-      mdlzBrand = originalEmail.properties["MDLZ Brand"];
-    }
-
-    const datePattern = /\d{2} \w{3} \d{4}/;
-    const dateMatch = originalEmailName.match(datePattern);
-
-    if (!dateMatch) {
-      return {
-        success: false,
-        skipped: true,
-        reason: "No date in original email name",
-      };
-    }
-
-    let clonedDate = new Date(dateMatch[0]);
-    clonedDate.setDate(clonedDate.getDate() + dayOffset);
-    clonedDate.setHours(hour, minute, 0, 0);
-
-    const updatedDate = clonedDate
-      .toLocaleDateString("en-GB", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      })
-      .replace(",", "")
-      .replace("Sept", "Sep");
-
-    const newEmailName = originalEmailName.replace(dateMatch[0], updatedDate);
-
-    console.log(`Processing email: ${originalEmailId} -> "${newEmailName}"`);
-    console.log(`Scheduled for: ${clonedDate.toISOString()} (${hour}:${minute < 10 ? '0' + minute : minute})`);
-
-    if (strategy === 'custom' && customOptions.customStartHour !== undefined) {
-      const startTime = `${customOptions.customStartHour}:${(customOptions.customStartMinute || 0).toString().padStart(2, '0')}`;
-      console.log(`Custom timing - Start Time: ${startTime}, Interval: ${customOptions.customInterval} minutes`);
-    }
-
-    if (processedEmailsCache.has(newEmailName)) {
-      console.log(`Skipped: "${newEmailName}" already in current batch cache`);
-      return { success: false, skipped: true, reason: "Duplicate in current batch" };
-    }
-
-    // Skip individual duplicate checks here - will be handled in batch
-    // This optimization is handled by the new batch processing logic
-
-    processedEmailsCache.add(newEmailName);
-
-    // Clone the email using correct v3 API endpoint
-    // Ensure ID is a string as required by HubSpot API
-    console.log(`📤 Cloning API Request: POST ${BASE_URL}/clone`);
-    console.log(`📤 Request Body:`, JSON.stringify({ id: String(originalEmailId), cloneName: newEmailName, language: "en" }));
-
-    cloneAttempted = true;
-
-    try {
-      const cloneResponse = await axios({
-        method: 'POST',
-        url: `${BASE_URL}/clone`,
-        data: {
-          id: String(originalEmailId),
-          cloneName: newEmailName,
-          language: "en"
-        },
-        headers: {
-          'Authorization': `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      clonedEmail = cloneResponse.data;
-    } catch (cloneError) {
-      // Even if clone returns an error, check if the email was actually created
-      // Some HubSpot API responses return error codes even when successful
-      console.log(`⚠️ Clone request returned status ${cloneError.response?.status} - verifying...`);
-
-      // Wait a bit for HubSpot to process
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // Check if the email exists in HubSpot
-      try {
-        const verifyResponse = await axios.get(`${BASE_URL}`, {
-          params: {
-            name: newEmailName,
-            limit: 1,
-          },
-          headers: {
-            Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-        });
-
-        if (verifyResponse.data.results && verifyResponse.data.results.length > 0) {
-          clonedEmail = verifyResponse.data.results[0];
-          console.log(`✅ Email cloned successfully! Found ID: ${clonedEmail.id}`);
-          // Clear the error - email was actually created successfully
-        } else {
-          // Email was not cloned, throw the original error
-          console.error(`❌ Clone failed - email not found in HubSpot`);
-          throw cloneError;
-        }
-      } catch (verifyError) {
-        // Verification failed, throw original clone error
-        console.error(`❌ Verification failed: ${verifyError.message}`);
-        throw cloneError;
-      }
-    }
-
-    const publishDateTimestamp = clonedDate.getTime();
-
-    // Update the cloned email with recipient lists and scheduled time using V3 API only
-    try {
-      // HARDCODED LISTS - ONLY these two lists will be used (clearing all original lists)
-      const SEED_LIST_ID = 39067;  // Seed list - add to "Send to" (ILS ID)
-      const EXCLUSION_LIST_ID = 10469;  // Unsubscribed/bounced/opt-outs - add to "Don't send to" (ILS ID)
-
-      console.log(`📋 Setting lists - Send to: [${SEED_LIST_ID}], Don't send to: [${EXCLUSION_LIST_ID}]`);
-      console.log(`📅 Setting scheduled time: ${clonedDate.toISOString()} (timestamp: ${publishDateTimestamp})`);
-
-      // Build v3 API update payload with ONLY the specified lists (replacing all original lists)
-      const v3UpdatePayload = {
-        // Set recipient lists using v3 'to' object format - this REPLACES all existing lists
-        to: {
-          contactIlsLists: {
-            include: [SEED_LIST_ID],      // ONLY this list in "Send to"
-            exclude: [EXCLUSION_LIST_ID]  // ONLY this list in "Don't send to"
-          }
-        },
-        publishDate: publishDateTimestamp
-      };
-
-      // Add custom properties
-      if (emailCategory !== null && emailCategory !== undefined) {
-        v3UpdatePayload.emailCategory = emailCategory;
-      }
-      if (mdlzBrand !== null && mdlzBrand !== undefined) {
-        v3UpdatePayload.mdlzBrand = mdlzBrand;
-      }
-
-      console.log(`📤 V3 API Update payload:`, JSON.stringify(v3UpdatePayload));
-
-      // Update the draft email using PATCH (v3 API)
-      const updateResponse = await axios.patch(
-        `${BASE_URL}/${clonedEmail.id}/draft`,
-        v3UpdatePayload,
-        {
-          headers: {
-            Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-      console.log(`📝 V3 API: Email draft updated with lists. Response status: ${updateResponse.status}`);
-    } catch (updateError) {
-      console.error(`⚠️ Update error (email still cloned): ${updateError.response?.status} - ${updateError.message}`);
-      if (updateError.response?.data) {
-        console.error(`   Error details:`, JSON.stringify(updateError.response.data));
-      }
-      // Continue despite update error - the email was still cloned
-    }
-
-    // Email stays as draft with publishDate set
-    console.log(`📝 Email cloned as DRAFT with scheduled publishDate: ${clonedDate.toISOString()}`);
-
-    // Save to MongoDB with enhanced error handling
-    try {
-      const clonedEmailRecord = new ClonedEmail({
-        originalEmailId: originalEmailId,
-        clonedEmailId: clonedEmail.id,
-        clonedEmailName: newEmailName,
-        scheduledTime: clonedDate,
-        cloningStrategy: strategy,
-        // Don't save custom properties in MongoDB (as requested)
-      });
-      await clonedEmailRecord.save();
-    } catch (saveError) {
-      console.error(`⚠️ MongoDB save error: ${saveError.message}`);
-      // Continue despite save error - the email was still cloned in HubSpot
-    }
-
-    console.log(`✅ Successfully cloned: "${newEmailName}" (ID: ${clonedEmail.id})`);
-
-    return {
-      success: true,
-      emailId: clonedEmail.id,
-      emailName: newEmailName,
-      scheduledTime: clonedDate.toISOString(),
-    };
-  } catch (error) {
-    console.error(
-      `❌ Error cloning email ${originalEmailId}:`,
-      error.response?.status || error.message
-    );
-    return {
-      success: false,
-      error: error.message,
-      details: error.response?.data,
-    };
-  }
-}
-
-
-
-// Add a debug endpoint to check email properties
-router.get("/debug-email/:emailId", async (req, res) => {
-  try {
-    const emailId = req.params.emailId;
-    const response = await axios.get(`${BASE_URL}/${emailId}`, {
-      headers: {
-        Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      params: {
-        properties: "name,emailCategory,mdlzBrand"
-      }
-    });
-
-    res.json({
-      success: true,
-      data: response.data,
-      properties: response.data.properties
-    });
-  } catch (error) {
-    console.error("Debug error:", error.response?.data || error.message);
-    res.status(500).json({
-      success: false,
-      message: "Failed to debug email.",
-      error: error.message,
-      details: error.response?.data,
-    });
-  }
-});
 
 async function EmailCloner(emailIds, cloningCount, strategy = "smart", customOptions = {}) {
   try {
@@ -481,34 +175,15 @@ async function EmailCloner(emailIds, cloningCount, strategy = "smart", customOpt
             const startTotalMinutes = startHour * 60 + startMinute;
             const scheduledTotalMinutes = startTotalMinutes + (customTimeCounter * interval);
 
-            let scheduledHour = Math.floor(scheduledTotalMinutes / 60);
-            let scheduledMinute = scheduledTotalMinutes % 60;
+            hour = Math.floor(scheduledTotalMinutes / 60);
+            minute = scheduledTotalMinutes % 60;
 
-            if (scheduledHour === 11 && scheduledMinute <= 55) {
-              hour = scheduledHour;
-              minute = scheduledMinute;
-            } else if (scheduledHour < 11 || (scheduledHour === 11 && scheduledMinute <= 55)) {
-              hour = 11;
-              minute = customTimeCounter * interval;
-              if (minute > 55) {
-                const afternoonOffset = minute - 55 - 1;
-                hour = 16;
-                minute = afternoonOffset;
-                if (minute >= 60) {
-                  hour += Math.floor(minute / 60);
-                  minute = minute % 60;
-                }
-              }
-            } else {
-              const morningSlots = Math.floor(56 / interval);
-              const afternoonIndex = customTimeCounter - morningSlots;
-              hour = 16;
-              minute = afternoonIndex * interval;
-              if (minute >= 60) {
-                hour += Math.floor(minute / 60);
-                minute = minute % 60;
-              }
+            // Cap at end of day to prevent date rollover
+            if (hour >= 24) {
+              hour = 23;
+              minute = 55;
             }
+
             customTimeCounter++;
             break;
 
@@ -537,18 +212,22 @@ async function EmailCloner(emailIds, cloningCount, strategy = "smart", customOpt
         const dateMatch = originalEmailName.match(datePattern);
 
         if (dateMatch) {
-          let clonedDate = new Date(dateMatch[0]);
-          clonedDate.setDate(clonedDate.getDate() + day);
-          clonedDate.setHours(hour, minute, 0, 0);
+          // Manually parse date to avoid timezone issues with new Date(string)
+          const monthMap = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
+          const dateParts = dateMatch[0].split(' ');
+          const parsedDay = parseInt(dateParts[0], 10);
+          const parsedMonth = monthMap[dateParts[1]];
+          const parsedYear = parseInt(dateParts[2], 10);
 
-          const updatedDate = clonedDate
-            .toLocaleDateString("en-GB", {
-              day: "2-digit",
-              month: "short",
-              year: "numeric",
-            })
-            .replace(",", "")
-            .replace("Sept", "Sep");
+          // Create email name date (just for calendar rollover, timezone doesn't matter)
+          const nameDate = new Date(parsedYear, parsedMonth, parsedDay + day);
+          const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+          const updatedDate = `${nameDate.getDate().toString().padStart(2, '0')} ${monthNames[nameDate.getMonth()]} ${nameDate.getFullYear()}`;
+
+          // Create scheduled time in UTC, adjusted for target timezone
+          // hour:minute is the desired time in SCHEDULE_TZ timezone
+          // Subtract offset to convert to UTC (e.g., 11:00 IST - 5:30 = 05:30 UTC)
+          let clonedDate = new Date(Date.UTC(parsedYear, parsedMonth, parsedDay + day, hour, minute, 0, 0) - (SCHEDULE_TZ_OFFSET * 60 * 1000));
 
           const newEmailName = originalEmailName.replace(dateMatch[0], updatedDate);
 
@@ -758,51 +437,54 @@ async function cloneAndScheduleEmailOptimized(
       }
     }
 
-    const publishDateTimestamp = scheduledTime.getTime();
-
-    // Update the cloned email with recipient lists and scheduled time using V3 API only
+    // Update the cloned email with recipient lists and scheduled time
     try {
       // HARDCODED LISTS - ONLY these two lists will be used (clearing all original lists)
       const SEED_LIST_ID = 39067;  // Seed list - add to "Send to" (ILS ID)
       const EXCLUSION_LIST_ID = 10469;  // Unsubscribed/bounced/opt-outs - add to "Don't send to" (ILS ID)
 
-      console.log(`📋 Setting lists - Send to: [${SEED_LIST_ID}], Don't send to: [${EXCLUSION_LIST_ID}]`);
-      console.log(`📅 Setting scheduled time: ${scheduledTime.toISOString()} (timestamp: ${publishDateTimestamp})`);
-
-      // Build v3 API update payload with ONLY the specified lists (replacing all original lists)
-      const v3UpdatePayload = {
-        // Set recipient lists using v3 'to' object format - this REPLACES all existing lists
+      // Step 1: Update DRAFT with recipient lists and custom properties
+      const draftPayload = {
         to: {
           contactIlsLists: {
-            include: [SEED_LIST_ID],      // ONLY this list in "Send to"
-            exclude: [EXCLUSION_LIST_ID]  // ONLY this list in "Don't send to"
+            include: [SEED_LIST_ID],
+            exclude: [EXCLUSION_LIST_ID]
           }
-        },
-        publishDate: publishDateTimestamp
+        }
       };
 
       // Add custom properties
       if (emailCategory !== null && emailCategory !== undefined) {
-        v3UpdatePayload.emailCategory = emailCategory;
+        draftPayload.emailCategory = emailCategory;
       }
       if (mdlzBrand !== null && mdlzBrand !== undefined) {
-        v3UpdatePayload.mdlzBrand = mdlzBrand;
+        draftPayload.mdlzBrand = mdlzBrand;
       }
 
-      console.log(`📤 V3 API Update payload:`, JSON.stringify(v3UpdatePayload));
+      console.log(`📋 Setting lists (V3 format) - Include: [${SEED_LIST_ID}], Exclude: [${EXCLUSION_LIST_ID}]`);
+      const draftResponse = await axios.patch(`${BASE_URL}/${clonedEmail.id}/draft`, draftPayload, {
+        headers: {
+          Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      });
+      console.log(`📝 Draft updated with recipient lists. Response status: ${draftResponse.status}`);
 
-      // Update the draft email using PATCH (v3 API)
-      const updateResponse = await axios.patch(
-        `${BASE_URL}/${clonedEmail.id}/draft`,
-        v3UpdatePayload,
-        {
-          headers: {
-            Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-      console.log(`📝 V3 API: Email draft updated with lists. Response status: ${updateResponse.status}`);
+      // Step 2: Set publishDate with sendOnPublish:false
+      // HubSpot API limitation: sendOnPublish:true ALWAYS clears publishDate
+      // So we store the date with sendOnPublish:false (confirmed working)
+      const publishDateISO = scheduledTime.toISOString();
+      console.log(`📅 Step 2: Setting publishDate=${publishDateISO} (sendOnPublish=false)...`);
+      const scheduleResponse = await axios.patch(`${BASE_URL}/${clonedEmail.id}`, {
+        sendOnPublish: false,
+        publishDate: publishDateISO
+      }, {
+        headers: {
+          Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      });
+      console.log(`✅ HubSpot publishDate set: ${scheduleResponse.data?.publishDate}`);
     } catch (updateError) {
       console.error(`⚠️ Update error (email still cloned): ${updateError.response?.status} - ${updateError.message}`);
       if (updateError.response?.data) {
@@ -810,9 +492,6 @@ async function cloneAndScheduleEmailOptimized(
       }
       // Continue despite update error - the email was still cloned
     }
-
-    // Email stays as draft with publishDate set
-    console.log(`📝 Email cloned as DRAFT with scheduled publishDate: ${scheduledTime.toISOString()}`);
 
     // Save to MongoDB
     try {
@@ -828,7 +507,7 @@ async function cloneAndScheduleEmailOptimized(
       console.error(`⚠️ MongoDB save error: ${saveError.message}`);
     }
 
-    console.log(`✅ Successfully cloned: "${newEmailName}" (ID: ${clonedEmail.id})`);
+    console.log(`✅ Successfully cloned: "${newEmailName}" (ID: ${clonedEmail.id}) [DRAFT]`);
 
     return {
       success: true,
@@ -846,7 +525,7 @@ async function cloneAndScheduleEmailOptimized(
   }
 }
 
-router.post("/clone-emails", async (req, res) => {
+router.post("/clone-emails", ensureAuthenticated, async (req, res) => {
   const { emailIds, cloningCount, strategy = "smart", customStartHour, customStartMinute, customInterval } = req.body;
 
   // input validation
@@ -931,7 +610,7 @@ router.post("/clone-emails", async (req, res) => {
 
 // Add a new route to get all cloned emails from the database
 // GET /api/cloned-emails?date=YYYY-MM-DD (optional date filter)
-router.get("/cloned-emails", async (req, res) => {
+router.get("/cloned-emails", ensureAuthenticated, async (req, res) => {
   try {
     let query = {};
 
@@ -968,7 +647,7 @@ router.get("/cloned-emails", async (req, res) => {
 });
 
 // Add a route to delete cloned emails from database and HubSpot
-router.delete("/cloned-emails/:id", async (req, res) => {
+router.delete("/cloned-emails/:id", ensureAuthenticated, async (req, res) => {
   try {
     const clonedEmail = await ClonedEmail.findById(req.params.id);
     if (!clonedEmail) {
@@ -1030,20 +709,40 @@ router.delete("/cloned-emails/:id", async (req, res) => {
   }
 });
 
-// Publish email endpoint - matches the working implementation
-router.post("/publish-email", async (req, res) => {
+// Publish email endpoint - V3 API
+router.post("/publish-email", ensureAuthenticated, async (req, res) => {
   const { emailId, scheduleTime } = req.body;
 
   try {
-    // Prepare request body for HubSpot API
-    const requestBody = scheduleTime
-      ? { sendAt: new Date(scheduleTime).getTime() }
-      : {};
+    // Look up the cloned email in our database
+    const clonedEmail = await ClonedEmail.findOne({ clonedEmailId: emailId });
 
-    // Call HubSpot API to publish the email
+    // If scheduleTime provided, update draft with publishDate before publishing
+    if (scheduleTime) {
+      try {
+        await axios.patch(
+          `https://api.hubapi.com/marketing/v3/emails/${emailId}/draft`,
+          {
+            publishDate: new Date(scheduleTime).toISOString(),
+            sendOnPublish: true
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        console.log(`📅 Email ${emailId} scheduled for: ${new Date(scheduleTime).toISOString()}`);
+      } catch (scheduleError) {
+        console.error(`⚠️ Failed to set schedule time: ${scheduleError.message}`);
+      }
+    }
+
+    // Call HubSpot V3 publish endpoint with NO body
     const response = await axios.post(
       `https://api.hubapi.com/marketing/v3/emails/${emailId}/publish`,
-      requestBody,
+      {},
       {
         headers: {
           Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
@@ -1052,9 +751,8 @@ router.post("/publish-email", async (req, res) => {
       }
     );
 
-    // Update database if email exists
+    // Update database status to published
     try {
-      const clonedEmail = await ClonedEmail.findOne({ clonedEmailId: emailId });
       if (clonedEmail) {
         clonedEmail.status = 'published';
         clonedEmail.publishedAt = new Date();
@@ -1088,7 +786,7 @@ router.post("/publish-email", async (req, res) => {
   }
 });
 
-router.get("/cloner", async (req, res) => {
+router.get("/cloner", ensureAuthenticated, async (req, res) => {
   try {
     res.status(200).render("cloner", {
       pageTitle: "Email cloning",

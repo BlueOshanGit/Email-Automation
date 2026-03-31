@@ -23,19 +23,6 @@ function ensureAuthenticated(req, res, next) {
  
 
 
-router.get("/login", async (req, res) => {
-  try {
-    res.render("login", {
-        pageTitle: "ED Automation",
-      activePage: "ED Automation"
-    });
-  } catch (error) {
-    console.log(error);
-    res.status(500).json({ msg: "Unable to get emails" });
-  }
-});
-
-
 // ✔️ CREATE email (protected)
 router.post("/add-email", ensureAuthenticated, async (req, res) => {
   try {
@@ -187,19 +174,6 @@ router.get('/email-publisher', ensureAuthenticated, async (req, res) => {
     res.render("emailPublisher", {
       pageTitle: "Email Publisher",
       activePage: "email publisher",
-    });
-  } catch (err) {
-    console.error("failed:", err);
-    res.status(500).json({ success: false });
-  }
-});
-
-// Keep old route for backward compatibility
-router.get('/docs', ensureAuthenticated, async (req, res) => {
-  try {
-    res.render("docs", {
-      pageTitle: "docs",
-      activePage: "docs",
     });
   } catch (err) {
     console.error("failed:", err);

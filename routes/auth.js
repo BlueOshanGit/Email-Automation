@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const router = express.Router();
 const { logLoginAttempt, detectSuspiciousActivity } = require('../service/loginTracking');
@@ -25,7 +26,7 @@ router.post('/login', async (req, res) => {
     }
 
     // Validate credentials
-    if (email.endsWith('@blueoshan.com') && password === '54321') {
+    if (email.endsWith('@blueoshan.com') && password === process.env.LOGIN_PASSWORD) {
       // Log successful login
       await logLoginAttempt({
         email,

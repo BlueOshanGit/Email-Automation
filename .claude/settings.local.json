@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(nslookup:*)",
+      "Bash(node -e:*)",
+      "WebSearch",
+      "WebFetch(domain:developers.hubspot.com)",
+      "WebFetch(domain:community.hubspot.com)",
+      "WebFetch(domain:www.postman.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.getfishtank.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:hubspot.mintlify-auth-docs.com)",
+      "WebFetch(domain:developers.hubspot.de)",
+      "WebFetch(domain:weld.app)",
+      "WebFetch(domain:api.hubspot.com)",
+      "Bash(curl:*)",
+      "Bash(python:*)",
+      "Bash(node:*)",
+      "Bash(test:*)"
+    ]
+  }
+}

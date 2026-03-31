@@ -25,13 +25,17 @@ const clonedEmailSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['scheduled', 'sent', 'failed'],
+    enum: ['scheduled', 'sent', 'failed', 'published'],
     default: 'scheduled'
   },
   cloningStrategy: {
     type: String,
     enum: ['smart', 'morning', 'afternoon', 'custom'],
     default: 'smart'
+  },
+  publishedAt: {
+    type: Date,
+    default: null
   },
   // Custom HubSpot properties
   emailCategory: {

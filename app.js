@@ -20,7 +20,7 @@ app.use(express.static("public"));
 app.use(methodOverride('_method'));
 
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'secret123',
+    secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false
 }));
@@ -41,8 +41,7 @@ app.engine("hbs", engine({
             return activePage === currentPage ? "active" : "";
         },
         isType: function (isMain, currentType) {
-            isMain = currentType.toLowerCase().includes("main");
-            return isMain ? "mainStyle" : "subStyle";
+            return currentType.toLowerCase().includes("main") ? "mainStyle" : "subStyle";
         }
     },
 }));

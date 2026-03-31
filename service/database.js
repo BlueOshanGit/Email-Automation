@@ -1,6 +1,10 @@
 // database
 const mongoose = require("mongoose");
+const dns = require("dns");
 require("dotenv").config();
+
+// Force Google DNS for SRV lookups (fixes ECONNREFUSED on some networks)
+dns.setServers(["8.8.8.8", "8.8.4.4"]);
 
 
 // MongoDB Connection

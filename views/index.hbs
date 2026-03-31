@@ -37,6 +37,7 @@
 
     <button id="openFormBtn" class="control-button" type="button" style="padding: 11px 22px; font-size: 14px; font-weight: 600; border-radius: 6px; background-color: #4A90E2; color: white; border: none; cursor: pointer; transition: all 0.3s; height: 42px; box-sizing: border-box; white-space: nowrap;">Add Lists</button>
     <button id="runBtn" class="control-button" type="button" style="padding: 11px 22px; font-size: 14px; font-weight: 600; border-radius: 6px; background-color: #4A90E2; color: white; border: none; cursor: pointer; transition: all 0.3s; height: 42px; box-sizing: border-box; white-space: nowrap;">Run Automation</button>
+    <button id="showSizesBtn" class="control-button" type="button" style="padding: 11px 22px; font-size: 14px; font-weight: 600; border-radius: 6px; background-color: #059669; color: white; border: none; cursor: pointer; transition: all 0.3s; height: 42px; box-sizing: border-box; white-space: nowrap;">Show Sizes</button>
   </div>
   
 </div>
@@ -84,7 +85,7 @@
       </div>
 
       <div class="grid-item campaign-section">
-        <div class="field-label">Campaign</div>
+        <div class="field-label">Campaign Title</div>
         <div class="field-value campaign-text">{{this.campaign}}</div>
       </div>
 
@@ -107,12 +108,12 @@
 
       <div class="grid-item primary-section">
         <div class="field-label">Primary</div>
-        <div class="field-value">{{this.primaryListId}}</div>
+        <div class="field-value">{{this.primaryListId}} <span class="list-size-badge" data-list-id="{{this.primaryListId}}"></span></div>
       </div>
 
       <div class="grid-item secondary-section">
         <div class="field-label">Secondary</div>
-        <div class="field-value">{{this.secondaryListId}}</div>
+        <div class="field-value">{{this.secondaryListId}} <span class="list-size-badge" data-list-id="{{this.secondaryListId}}"></span></div>
       </div>
 
       <div class="grid-item contacts-section">
@@ -151,7 +152,7 @@
     <span id="closeModal" class="close" aria-label="Close">&times;</span>
     <form action="/add-email" method="POST" id="emailForm">
       <h2>List Details</h2>
-      <label for="campaign">Campaign:</label>
+      <label for="campaign">Campaign Title:</label>
       <input type="text" id="campaign" name="campaign" required />
 
       <label for="brand">Brand:</label>
@@ -169,7 +170,7 @@
       <label for="sendContactListId">Sent Contacts ILS List ID:</label>
       <input type="number" id="sendContactListId" name="sendContactListId" required />
 
-      <label for="domain">Domain:</label>
+      <label for="domain">Tier:</label>
       <select id="domain" name="domain" required>
         <option value="" disabled selected>Select a domain</option>
         <option value="Tier 1">Tier 1</option>
@@ -1785,4 +1786,78 @@
       height: 250px !important;
     }
   }
+
+  .list-size-badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    color: #059669;
+    background: #d1fae5;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  .list-size-badge.loading {
+    color: #6b7280;
+    background: #f3f4f6;
+  }
 </style>
+
+<script>
+  // Fetch list sizes on button click only
+  document.getElementById('showSizesBtn').addEventListener('click', async function() {
+    const btn = this;
+    const badges = document.querySelectorAll('.list-size-badge[data-list-id]');
+    if (badges.length === 0) return;
+
+    // Collect unique, non-empty list IDs
+    const listIds = [...new Set(
+      Array.from(badges)
+        .map(b => b.getAttribute('data-list-id'))
+        .filter(id => id && id.trim() !== '')
+    )];
+
+    if (listIds.length === 0) return;
+
+    // Disable button and show loading
+    btn.disabled = true;
+    btn.textContent = 'Loading...';
+    badges.forEach(b => {
+      if (b.getAttribute('data-list-id')) {
+        b.textContent = '...';
+        b.classList.add('loading');
+      }
+    });
+
+    try {
+      const res = await fetch('/api/lists/sizes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ listIds })
+      });
+      const data = await res.json();
+
+      if (data.success && data.sizes) {
+        badges.forEach(b => {
+          const id = b.getAttribute('data-list-id');
+          if (id && data.sizes[id] !== undefined) {
+            b.textContent = data.sizes[id].toLocaleString();
+            b.classList.remove('loading');
+          } else if (id) {
+            b.textContent = '';
+            b.classList.remove('loading');
+          }
+        });
+      } else {
+        badges.forEach(b => { b.textContent = ''; b.classList.remove('loading'); });
+      }
+    } catch (err) {
+      console.error('Failed to fetch list sizes:', err);
+      badges.forEach(b => { b.textContent = ''; b.classList.remove('loading'); });
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Show Sizes';
+    }
+  });
+</script>
