@@ -694,24 +694,21 @@
             const emailParts = normalizedEmail.split('-').map(p => p.trim()).filter(p => p.length > 0);
             const listParts = normalizedList.split('-').map(p => p.trim()).filter(p => p.length > 0);
 
-            // Must have at least 3 parts to match (Brand - Category - Campaign)
+            // Must have at least 2 parts to match (Brand - Category)
             // The last part is typically the date which we ignore for name matching
-            if (emailParts.length < 3 || listParts.length < 3) {
+            if (emailParts.length < 2 || listParts.length < 2) {
                 return false;
             }
 
-            // Compare first 3 parts: Brand (0) - Category (1) - Campaign (2)
+            // Compare first 2 parts: Brand (0) - Category (1)
             const emailBrand = emailParts[0];
             const listBrand = listParts[0];
             const emailCategory = emailParts[1];
             const listCategory = listParts[1];
-            const emailCampaign = emailParts[2];
-            const listCampaign = listParts[2];
 
-            // All three parts must match exactly
+            // Both parts must match exactly
             return (emailBrand === listBrand &&
-                   emailCategory === listCategory &&
-                   emailCampaign === listCampaign);
+                   emailCategory === listCategory);
         }
 
 
